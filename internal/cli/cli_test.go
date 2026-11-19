@@ -298,6 +298,16 @@ func TestOnlyAnotherProjectsMemoryNamesItsProject(t *testing.T) {
 	if strings.Count(out, "/work/alpha") != 1 || strings.Contains(out, "/work/beta") {
 		t.Fatalf("%q", out)
 	}
+	// A subdirectory is the same project: not named, and listed with it.
+	r.add("报销单据按月装订，月底前交财务", "--project", "/work/beta/2026")
+	_, out = r.memory("", "search", "报销", "--project", "/work/beta")
+	if strings.Contains(out, "/work/beta/2026") {
+		t.Fatalf("a subdirectory's memory named as another project's: %q", out)
+	}
+	_, out = r.memory("", "list", "--project", "/work/beta")
+	if !strings.Contains(out, "月底前交财务") || !strings.Contains(out, "行程截图") || strings.Contains(out, "发票原件") {
+		t.Fatalf("list --project: %q", out)
+	}
 }
 
 // With no --project the project is the directory the command runs in.

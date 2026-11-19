@@ -471,7 +471,7 @@ func (c command) printAll(hits []store.Hit, asked *string) {
 		if h.Contradicted > 0 {
 			parts = append(parts, fmt.Sprintf("contradicted %dx", h.Contradicted))
 		}
-		if h.Project != nil && (asked == nil || store.NormalizeProject(*h.Project) != *asked) {
+		if h.Project != nil && (asked == nil || !store.SameProject(*h.Project, *asked)) {
 			parts = append(parts, *h.Project)
 		}
 		if h.SupersededBy != nil {

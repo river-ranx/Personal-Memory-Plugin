@@ -81,10 +81,10 @@ func TestAProjectIsTheWorkingDirectoryAsAnAbsolutePath(t *testing.T) {
 		" /work/alpha/ ":   "/work/alpha",
 		"/work/./alpha":    "/work/alpha",
 		"/work/x/../alpha": "/work/alpha",
-		".":              cwd,
-		"sub":            filepath.Join(cwd, "sub"),
-		"":               "",
-		"   ":            "",
+		".":                cwd,
+		"sub":              filepath.Join(cwd, "sub"),
+		"":                 "",
+		"   ":              "",
 	} {
 		if got := NormalizeProject(in); got != want {
 			t.Fatalf("NormalizeProject(%q) = %q, want %q", in, got, want)
@@ -96,6 +96,15 @@ func TestAProjectIsTheWorkingDirectoryAsAnAbsolutePath(t *testing.T) {
 	}
 	if relateProjects(&a, &c) != ProjectOther {
 		t.Fatal("two directories are two projects")
+	}
+	// A repository and its subdirectories are one project, either way round;
+	// a directory that only starts with the same letters is not.
+	sub, lookalike := "/work/alpha/docs/ch3", "/work/alpha-2"
+	if relateProjects(&sub, &b) != ProjectSame || relateProjects(&b, &sub) != ProjectSame {
+		t.Fatal("a subdirectory is the same project")
+	}
+	if relateProjects(&lookalike, &b) != ProjectOther {
+		t.Fatal("a look-alike directory is another project")
 	}
 	if relateProjects(&a, nil) != ProjectUnknown {
 		t.Fatal("no project asked is unknown, not other")

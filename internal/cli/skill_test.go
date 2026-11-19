@@ -107,11 +107,12 @@ func TestWhenToWriteIsAsApproved(t *testing.T) {
 	}
 }
 
-// What is worth writing down is said in the skill and in the prompts the hooks
-// give; they say it in the same words, so one cannot change without the other.
+// What is worth writing down is said in the skill and in the session's prompt
+// (the turn-end reminder points back to that); they say it in the same words,
+// so one cannot change without the other.
 func TestTheSkillAndThePromptsAgreeOnWhatIsWorthKeeping(t *testing.T) {
 	for _, item := range []string{"定下的结论和决策（连同理由）", "概念和口径的界定", "资料来源可不可靠及出处", "试过不行的思路及原因", "人和组织的背景与约定"} {
-		for name, text := range map[string]string{"the skill": root.Skill, "the session prompt": hooks.Note, "the turn-end reminder": hooks.TurnEnd} {
+		for name, text := range map[string]string{"the skill": root.Skill, "the session prompt": hooks.Note} {
 			if !strings.Contains(text, item) {
 				t.Errorf("%s does not name %q", name, item)
 			}

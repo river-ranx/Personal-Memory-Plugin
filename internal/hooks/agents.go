@@ -64,27 +64,40 @@ func sessionStart(agent string) any {
 	return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": startEvent, "additionalContext": Note}}
 }
 
-// turnEnd keeps the agent from stopping once, with [TurnEnd] — unless
-// reminding would go wrong: the stop is the one a reminder already asked for
-// (asking again would never end), the agent may not run commands, or there is
-// nothing to look back on. A payload it cannot read gets no reminder, for the
-// same reason: a loop is worse than a missed one.
+// turnEnd keeps the agent from stopping once, with [TurnEnd] — unless it was
+// switched off ([switchedOff]), or reminding would go wrong: the stop is the
+// one a reminder already asked for (asking again would never end), the agent
+// may not run commands, or there is nothing to look back on. A payload it
+// cannot read gets no reminder, for the same reason: a loop is worse than a
+// missed one.
 func turnEnd(agent string, payload []byte, getenv func(string) string) any {
 	var p stop
-	readable := json.Unmarshal(payload, &p) == nil
+	remind := json.Unmarshal(payload, &p) == nil && !switchedOff(getenv)
 	if agent == "antigravity" {
 		// Only a turn that ended normally; continuationActive is Antigravity's
 		// stop_hook_active. Any decision but "continue" lets it stop.
-		if !readable || p.ContinuationActive || p.TerminationReason != "NO_TOOL_CALL" {
+		if !remind || p.ContinuationActive || p.TerminationReason != "NO_TOOL_CALL" {
 			return map[string]any{"decision": "stop"}
 		}
 		return map[string]any{"decision": "continue", "reason": TurnEnd}
 	}
-	if !readable || p.StopHookActive || p.PermissionMode == "plan" ||
+	if !remind || p.StopHookActive || p.PermissionMode == "plan" ||
 		agent == "codex" && consolidating(p.Cwd, getenv) {
 		return nil
 	}
 	return map[string]any{"decision": "block", "reason": TurnEnd}
+}
+
+// switchedOff is whether whoever started the agent asked for no turn-end
+// reminder: MEMORY_TURN_END=off (or 0, false). A script running `claude -p`
+// sets it, since nothing in the payload tells a script from a person — an
+// app driving the agent through its SDK looks the same as a script does.
+func switchedOff(getenv func(string) string) bool {
+	switch strings.ToLower(strings.TrimSpace(getenv("MEMORY_TURN_END"))) {
+	case "off", "0", "false", "no":
+		return true
+	}
+	return false
 }
 
 // consolidating is whether a Codex turn is Codex's own memory consolidation,

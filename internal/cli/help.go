@@ -27,7 +27,7 @@ type spec struct {
 
 // everyCommand are the flags every command takes.
 var everyCommand = []flagSpec{
-	{"project", "DIR", "the working directory the memory belongs to (default: the current directory); it only affects ranking, and in `list` it filters"},
+	{"project", "DIR", "the working directory the memory belongs to (default: the current directory; its parent and subdirectories are the same project); it only affects ranking, and in `list` it filters"},
 	{"json", "", "print the answer as JSON"},
 }
 
@@ -140,11 +140,13 @@ WHAT IT DOES
   这次报销怎么走); English words count, and so do abbreviations such as ci, db, oa;
   single letters and function words (to, is, the, with) do not.
   Ranking: a match in a memory's title or keywords outweighs one in its text.
-  Memories from this working directory rank above other directories' (which are
-  still returned). Memories used or verified often rank higher; contradicted
-  ones, and ones unused for months, rank lower.
+  Memories from this project — this directory, one inside it or one containing
+  it — rank above other projects' (which are still returned). Memories
+  confirmed as used or verified often rank higher; contradicted ones, and ones
+  unused for months, rank lower.
   Not returned: archived memories, and memories a newer one replaced.
-  Each memory returned counts as used (once a day at most), which keeps it from fading.
+  Each memory returned is noted (once a day at most), which keeps it from
+  fading; it counts as used only when you say so with memory confirm.
 
 OUTPUT
   At most --limit results, best first; each is a header line and then the text
@@ -252,7 +254,8 @@ WHAT IT DOES
 OUTCOMES (--outcome; used when left out)
   used          you relied on it and saw no conflict
   verified      you checked it against the source and it is right; three
-                verifications on three different days make a memory "verified"
+                verifications on three different days since it was last
+                contradicted (however far apart) make a memory "verified"
   contradicted  it is wrong or out of date (say how with --note); it ranks lower
                 from then on, and a verified memory falls back to unverified
 
@@ -305,7 +308,8 @@ WHAT IT DOES
   Lists memories newest first, in the same form as search. It is for looking
   through the store, so it does not rank, and it does not count as a use.
   Unlike search it also lists memories a newer one replaced (marked
-  "superseded by #N"). With --project DIR it lists only the memories written from DIR.
+  "superseded by #N"). With --project DIR it lists only that project's memories:
+  written from DIR, a directory inside it, or one containing it.
 
 EXAMPLES
   memory list

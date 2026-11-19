@@ -92,20 +92,31 @@ func Score(s Signals) float64 {
 	return score * Decay(s.DaysSinceUse)
 }
 
-// relateProjects compares a memory's project with the one asked from, after
-// [NormalizeProject] on both: the same directory or not.
+// relateProjects compares a memory's project with the one asked from: see
+// [SameProject].
 func relateProjects(memory, asked *string) ProjectRelation {
-	if memory == nil || asked == nil {
+	if memory == nil || asked == nil || NormalizeProject(*memory) == "" || NormalizeProject(*asked) == "" {
 		return ProjectUnknown
 	}
-	m, a := NormalizeProject(*memory), NormalizeProject(*asked)
-	if m == "" || a == "" {
-		return ProjectUnknown
-	}
-	if m == a {
+	if SameProject(*memory, *asked) {
 		return ProjectSame
 	}
 	return ProjectOther
+}
+
+// SameProject is whether two projects are one: the same directory, or one
+// inside the other, so a repository and its subdirectories are one project.
+// Ranking, the header's note of another project and `list --project` all ask
+// this, so they cannot disagree.
+func SameProject(a, b string) bool {
+	a, b = NormalizeProject(a), NormalizeProject(b)
+	return a != "" && b != "" && (a == b || inside(a, b) || inside(b, a))
+}
+
+// inside is whether dir is below parent.
+func inside(dir, parent string) bool {
+	sep := string(filepath.Separator)
+	return strings.HasPrefix(dir, strings.TrimSuffix(parent, sep)+sep)
 }
 
 // NormalizeProject is the one spelling of a project, which is the working

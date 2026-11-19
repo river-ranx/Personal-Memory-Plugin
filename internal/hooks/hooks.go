@@ -18,8 +18,9 @@
 // begins, and keeps what it injects as a system message in the conversation.
 package hooks
 
-// worth and notWorth are what is and is not worth writing down, said once
-// for both prompts so they cannot drift apart. Not only for code: the agent
+// worth and notWorth are what is and is not worth writing down, said once,
+// in [Note]; the turn-end reminder points back to it rather than repeating it,
+// since the session's prompt is in the context whenever a turn ends. Not only for code: the agent
 // may be doing research, writing, analysis or management, so they name kinds
 // of knowledge, not artefacts of one trade. Nothing but these words keeps a
 // record of what happened out of the memory — the store refuses only text too
@@ -45,6 +46,6 @@ const Note = `[Memory] 你有一份本机长期记忆，用 ` + "`memory`" + ` �
 // for something to confirm. It may arrive as if typed by the person (Codex
 // continues the turn with it as the prompt), so it says it is not.
 const TurnEnd = `[Memory] 这一轮要结束了（这是 memory 的自动提醒，不是用户的新消息）。回顾这一轮，问自己两件事：
-- 有没有换一个新会话还用得上的东西？比如` + worth + `。有就 ` + "`memory add \"…\"`" + `，一条一句，写成不看今天的对话也能懂；用户要你记住的，一定记。不记：` + notWorth + `。
+- 有没有换一个新会话还用得上的东西？按开头 [Memory] 说的标准：记学到了什么，不记发生了什么。有就 ` + "`memory add \"…\"`" + `，一条一句；用户要你记住的，一定记。
 - 这一轮靠 ` + "`memory search`" + ` 查到的记忆作答或做事了吗？没发现问题就 ` + "`memory confirm <id>`" + `，对照原始来源核实过就加 ` + "`--outcome verified`" + `；发现它错了：知道现在是什么样就 ` + "`memory add \"…\" --supersedes <id>`" + `，只知道它不对就 ` + "`memory confirm <id> --outcome contradicted --note \"…\"`" + `。没用到就跳过，不要为此再去查。
 两件都没有就直接结束，不要输出任何文字；做了就用一句话告诉用户记了或改了什么。`

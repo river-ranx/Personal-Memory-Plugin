@@ -174,6 +174,17 @@ func TestConfidenceFollowsConfirmations(t *testing.T) {
 	if got, _ := s.Entry(r.ID); got.Confidence != ConfidenceObserved || got.Contradicted != 1 {
 		t.Fatalf("after a contradiction: %s, %d", got.Confidence, got.Contradicted)
 	}
+	// Verified again from then on: three more days, months apart — the 30 days
+	// that counts are shown over do not bound it.
+	for i := range 3 {
+		setClock(s, 1_800_000_000+uint64(10+i*60)*86400)
+		if _, err := s.Confirm([]int64{r.ID}, OutcomeVerified, ""); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := s.Entry(r.ID); (got.Confidence == ConfidenceVerified) != (i == 2) {
+			t.Fatalf("after %d verifications since the contradiction: %s", i+1, got.Confidence)
+		}
+	}
 	if _, err := s.Confirm([]int64{r.ID}, "maybe", ""); !errors.Is(err, ErrInvalid) {
 		t.Fatal("an unknown outcome is accepted")
 	}
@@ -221,9 +232,10 @@ func ids(hits []Hit) []string {
 	return out
 }
 
-// A search is a read: asking again within the day writes nothing, and a
-// memory that keeps being asked about does not climb the ranking for it.
-func TestAMemoryIsCountedAsUsedOncePerDay(t *testing.T) {
+// A search is a read: a memory it returns is noted once a day, which keeps it
+// from fading, and is never counted as used — a memory that keeps matching
+// must not climb the ranking for matching. Only a confirm is a use.
+func TestASearchKeepsAMemoryFromFadingButIsNotAUse(t *testing.T) {
 	s := open(t)
 	r := write(t, s, Draft{Content: "发版前先跑 make check", Kind: KindRule})
 	for range 5 {
@@ -231,13 +243,20 @@ func TestAMemoryIsCountedAsUsedOncePerDay(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got, _ := s.Entry(r.ID); got.Uses != 1 {
-		t.Fatalf("5 searches in a day count %d uses", got.Uses)
-	}
 	setClock(s, 1_800_000_000+86400+1)
 	s.Search("发版", nil, 5)
-	if got, _ := s.Entry(r.ID); got.Uses != 2 {
-		t.Fatalf("a second day counts %d uses", got.Uses)
+	if n := countRows(t, s, "SELECT COUNT(*) FROM memory_events WHERE kind = 'hit'"); n != 2 {
+		t.Fatalf("6 searches over 2 days noted %d times", n)
+	}
+	got, _ := s.Entry(r.ID)
+	if got.Uses != 0 || got.LastUsed == nil || *got.LastUsed != 1_800_000_000+86400+1 {
+		t.Fatalf("uses %d, last seen %v", got.Uses, got.LastUsed)
+	}
+	if _, err := s.Confirm([]int64{r.ID}, OutcomeUsed, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Entry(r.ID); got.Uses != 1 {
+		t.Fatalf("a confirm counts %d uses", got.Uses)
 	}
 }
 

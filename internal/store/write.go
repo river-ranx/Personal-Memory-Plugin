@@ -16,11 +16,17 @@ const (
 	HistoryContradicted = "contradicted"
 )
 
-// usedKinds are the events that count as a use, for the use count and for
-// when decay starts.
-var usedKinds = []string{HistoryHit, HistoryUsed, HistoryVerified}
+// liveKinds keep a memory from fading: returned to a search, used, verified.
+// Decay runs from the latest of them.
+var liveKinds = []string{HistoryHit, HistoryUsed, HistoryVerified}
 
-// Three verifications and no contradiction promote an observed memory; a
+// useKinds count as a use, which raises a memory's rank: only what an agent
+// reports with confirm. Being returned to a search is not a use, or a memory
+// that matches often would rank itself up for matching.
+var useKinds = []string{HistoryUsed, HistoryVerified}
+
+// Three verifications since the last contradiction (or ever, if none), on
+// three different days however far apart, promote an observed memory; a
 // single contradiction demotes a verified one at once.
 const promoteVerifiedN = 3
 
@@ -144,7 +150,7 @@ type Confirmation struct {
 
 // Confirm records outcome for each id and adjusts confidence: a
 // contradiction demotes a verified memory at once; three verifications — on
-// three different days — with no contradiction promote an observed one.
+// three different days — since the last contradiction promote an observed one.
 // A memory is reported once a day per outcome (see [reportInterval]); a repeat
 // is noted in the result, not counted.
 func (s *Store) Confirm(ids []int64, outcome Outcome, note string) (Confirmation, error) {
@@ -180,12 +186,17 @@ func (s *Store) Confirm(ids []int64, outcome Outcome, note string) (Confirmation
 					confidence = ConfidenceObserved
 				}
 			case OutcomeVerified:
-				counts, err := countsOf(tx, []int64{id}, now)
-				if err != nil {
+				// Every verification since the last contradiction, however long
+				// ago; one a day at most, so this many are this many days.
+				var since int
+				if err := tx.QueryRow(`SELECT COUNT(*) FROM memory_events
+				                        WHERE memory_id = ?1 AND kind = ?2
+				                          AND at > COALESCE((SELECT MAX(at) FROM memory_events
+				                                              WHERE memory_id = ?1 AND kind = ?3), -1)`,
+					id, HistoryVerified, HistoryContradicted).Scan(&since); err != nil {
 					return err
 				}
-				c := counts[id]
-				if confidence == ConfidenceObserved && c.Verified >= promoteVerifiedN && c.Contradicted == 0 {
+				if confidence == ConfidenceObserved && since >= promoteVerifiedN {
 					confidence = ConfidenceVerified
 				}
 			}

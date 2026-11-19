@@ -44,10 +44,14 @@ type Hit struct {
 	Counts
 }
 
-// Counts are a memory's events over the stats window, and its last use.
+// Counts are a memory's events over the stats window, and when it was last
+// seen in use.
 type Counts struct {
+	// Uses are the agents' reports that it was used or verified; a return
+	// from a search is not one.
 	Uses, Verified, Contradicted int
-	// LastUsed is the last use or confirmation, Unix seconds; nil if never.
+	// LastUsed is the last time it was returned, used or verified, Unix
+	// seconds; nil if never. Decay runs from it.
 	LastUsed *uint64
 }
 
@@ -210,8 +214,8 @@ func (s *Store) List(q ListQuery) ([]Hit, error) {
 			rows.Close()
 			return nil, err
 		}
-		// Projects are compared normalized, which SQL cannot do.
-		if q.Project != "" && (r.Project == nil || NormalizeProject(*r.Project) != NormalizeProject(q.Project)) {
+		// Projects are compared as paths, which SQL cannot do.
+		if q.Project != "" && (r.Project == nil || !SameProject(*r.Project, q.Project)) {
 			continue
 		}
 		records = append(records, r)
@@ -243,8 +247,9 @@ func withCounts(q queryer, records []Record, now uint64) ([]Hit, error) {
 	return hits, nil
 }
 
-// countsOf is each memory's event counts over the stats window and its last
-// use ever, in one query; a memory with no events is absent (zero Counts).
+// countsOf is each memory's event counts over the stats window and the last
+// time it was returned, used or verified, in one query; a memory with no
+// events is absent (zero Counts).
 func countsOf(q queryer, ids []int64, now uint64) (map[int64]Counts, error) {
 	out := make(map[int64]Counts, len(ids))
 	if len(ids) == 0 {
@@ -261,13 +266,14 @@ func countsOf(q queryer, ids []int64, now uint64) (map[int64]Counts, error) {
 		}
 		return strings.Join(out, ", ")
 	}
-	isUse := "kind IN (" + marks(len(usedKinds), func(i int) any { return usedKinds[i] }) + ")"
+	isUse := "kind IN (" + marks(len(useKinds), func(i int) any { return useKinds[i] }) + ")"
+	isLive := "kind IN (" + marks(len(liveKinds), func(i int) any { return liveKinds[i] }) + ")"
 	inIDs := marks(len(ids), func(i int) any { return ids[i] })
 	rows, err := q.Query(`SELECT memory_id,
               COALESCE(SUM(CASE WHEN at >= ?1 AND `+isUse+` THEN 1 ELSE 0 END), 0),
               COALESCE(SUM(CASE WHEN at >= ?1 AND kind = ?2 THEN 1 ELSE 0 END), 0),
               COALESCE(SUM(CASE WHEN at >= ?1 AND kind = ?3 THEN 1 ELSE 0 END), 0),
-              MAX(CASE WHEN `+isUse+` THEN at END)
+              MAX(CASE WHEN `+isLive+` THEN at END)
             FROM memory_events WHERE memory_id IN (`+inIDs+`)
             GROUP BY memory_id`, args...)
 	if err != nil {
@@ -315,7 +321,7 @@ func (s *Store) Prune() error {
                               AND id NOT IN (SELECT id FROM (
                                   SELECT id, ROW_NUMBER() OVER (PARTITION BY memory_id ORDER BY at DESC) AS n
                                     FROM memory_events WHERE kind IN (?3, ?4, ?5)) WHERE n = 1)`,
-			cut, HistoryHit, usedKinds[0], usedKinds[1], usedKinds[2])
+			cut, HistoryHit, liveKinds[0], liveKinds[1], liveKinds[2])
 		return err
 	})
 }

@@ -185,19 +185,23 @@ func TestTheReminderAsksAndLetsGo(t *testing.T) {
 			t.Fatalf("the reminder lacks %q:\n%s", want, TurnEnd)
 		}
 	}
-	if n := len([]rune(TurnEnd)); n > 560 {
+	if n := len([]rune(TurnEnd)); n > 420 {
 		t.Fatalf("the reminder is %d characters: it comes at the end of every turn", n)
 	}
 }
 
 // Memory is not only for code: the agent may be doing research, writing,
-// analysis or management. Both prompts say what is worth keeping in the same
-// words, and in words of no one trade.
+// analysis or management. What is worth keeping is said once, in the session's
+// prompt; the turn-end reminder points back to it instead of repeating it. And
+// neither speaks the words of one trade.
 func TestThePromptsAreForAnyKindOfWork(t *testing.T) {
+	if !strings.Contains(Note, worth) || !strings.Contains(Note, notWorth) || !strings.HasPrefix(Note, "[Memory]") {
+		t.Fatal("the session's prompt does not say what is worth keeping")
+	}
+	if strings.Contains(TurnEnd, worth) || !strings.Contains(TurnEnd, "开头 [Memory] 说的标准") || !strings.Contains(TurnEnd, "记学到了什么，不记发生了什么") {
+		t.Fatal("the reminder does not point back to the session's prompt, in short")
+	}
 	for name, prompt := range map[string]string{"Note": Note, "TurnEnd": TurnEnd} {
-		if !strings.Contains(prompt, worth) || !strings.Contains(prompt, notWorth) {
-			t.Fatalf("%s does not say what is worth keeping in the shared words", name)
-		}
 		for _, trade := range []string{"git", "代码", "部署", "合并", "测试", "环境", "踩坑", "项目"} {
 			if strings.Contains(prompt, trade) {
 				t.Fatalf("%s speaks of %q, which belongs to one trade:\n%s", name, trade, prompt)
@@ -214,5 +218,41 @@ func TestASessionStartIgnoresItsPayload(t *testing.T) {
 		if errw != "" || context(t, out) != Note {
 			t.Fatalf("payload %q: %q %q", payload, out, errw)
 		}
+	}
+}
+
+// Whoever starts the agent can switch the turn-end reminder off — a script
+// running `claude -p` looks no different from a person — and nothing else.
+func TestTheTurnEndReminderCanBeSwitchedOff(t *testing.T) {
+	stopWith := func(agent, payload, value string) string {
+		var o, e bytes.Buffer
+		Run(agent, "Stop", strings.NewReader(payload), &o, &e, func(k string) string {
+			if k == "MEMORY_TURN_END" {
+				return value
+			}
+			return ""
+		})
+		return strings.TrimSpace(o.String())
+	}
+	claude := `{"cwd":"/work/x","stop_hook_active":false}`
+	antigravity := `{"terminationReason":"NO_TOOL_CALL","continuationActive":false}`
+	for _, off := range []string{"off", "OFF", "0", "false", " no "} {
+		if out := stopWith("claude", claude, off); out != "" {
+			t.Fatalf("MEMORY_TURN_END=%q: %q", off, out)
+		}
+		if d, _ := decision(t, stopWith("antigravity", antigravity, off)); d != "stop" {
+			t.Fatalf("antigravity, MEMORY_TURN_END=%q: not let stop", off)
+		}
+	}
+	for _, on := range []string{"", "on", "1"} {
+		if d, _ := decision(t, stopWith("codex", claude, on)); d != "block" {
+			t.Fatalf("MEMORY_TURN_END=%q: no reminder", on)
+		}
+	}
+	// The session's prompt is not switched off with it.
+	var o, e bytes.Buffer
+	Run("claude", "SessionStart", strings.NewReader("{}"), &o, &e, func(string) string { return "off" })
+	if context(t, strings.TrimSpace(o.String())) != Note {
+		t.Fatal("switching the reminder off took the session's prompt with it")
 	}
 }
