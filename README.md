@@ -14,10 +14,19 @@ Agent ── memory search / add / confirm ──▶ ~/.memory/memory.db
 ## 安装
 
 ```sh
-make install                    # 编到 ~/.local/bin/memory，给三家装好 skill 和 Hook
-make install AGENTS="claude"    # 只装一家
-make uninstall
+curl -fsSL https://raw.githubusercontent.com/river-ranx/Personal-Memory-Plugin/main/install.sh | sh
 ```
+
+支持 macOS 和 Linux（arm64、amd64），不需要 Go，也不需要装 SQLite。脚本会：
+
+1. 下载对应平台的 `memory`，用发布里的 `SHA256SUMS` 校验，放到 `~/.local/bin/memory`；
+2. 给本机找得到的 Agent（有配置目录或命令的）装好 skill 和两个 Hook；
+3. 记忆库 `~/.memory/memory.db` 在第一次使用时自动创建。
+
+可选的环境变量：`MEMORY_AGENTS="claude codex"` 只装这几家，`MEMORY_VERSION=v0.1.0` 装指定版本，
+`MEMORY_BIN_DIR` 改放命令的目录。再跑一次就是升级，记忆不受影响。Codex 装完要在 Codex 里跑一次 `/hooks` 信任新 Hook。
+
+卸载：`memory uninstall claude codex antigravity && rm ~/.local/bin/memory`（记忆库不删，要删就删 `~/.memory`）。
 
 | Agent | Skill | Hook 配置 |
 | --- | --- | --- |
@@ -120,7 +129,11 @@ Hook 不碰数据库、不留状态，任何情况都以 0 退出，不让 Agent
 ## 开发
 
 ```sh
-make build    # 编到 bin/memory
-make test     # go vet + go test
+make build                      # 编到 bin/memory
+make test                       # go vet + go test
+make install                    # 从源码装：编到 ~/.local/bin/memory，给三家装好 skill 和 Hook
+make dist                       # 交叉编译 dist/memory-<系统>-<架构> 和 SHA256SUMS
 ```
+
+发布：`make dist`，再把 `dist/` 里的文件传到一个 GitHub Release，`install.sh` 默认装最新的那个。
 
