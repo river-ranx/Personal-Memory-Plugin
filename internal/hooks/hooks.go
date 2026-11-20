@@ -49,6 +49,7 @@ const (
 	write    = "`memory add \"<一句话>\" --kind <类型> --keywords <词,词>`"
 	kinds    = "--kind 必填，按以后怎么用它选：rule 必须照做｜decision 定下的选择及理由｜preference 用户的习惯、口味和纠正｜practice 可复用的做法｜fact 事情现在的样子（会过时）"
 	keywords = "--keywords 写正文里没有、以后可能拿来搜的词：同义词、另一种语言的叫法、缩写"
+	fix      = "只是类型或关键词写错：`memory edit <id> --kind <类型>`，原地改，id 不变"
 	example  = "例：`memory add \"周报先给组长过目再发全组，她要先核对数字\" --kind preference --keywords 汇报,review`"
 )
 
@@ -61,6 +62,7 @@ const Note = `[Memory] 你有一份本机长期记忆，用 ` + "`memory`" + ` �
   ` + write + `
   · ` + kinds + `
   · ` + keywords + `
+  · ` + fix + `
   · ` + example + `
 - 用：记忆只是过去留下的线索，不是事实——可能记错、过时，或不适用于眼前这件事。先看头部的年龄和标记，依赖它之前先核实；它与用户当下的话、或你手头的材料冲突时，以后者为准，并更新那条记忆（用 ` + "`memory --help`" + ` 看怎么改）。
 - 不记：` + notWorth + `。`
@@ -71,7 +73,7 @@ const Note = `[Memory] 你有一份本机长期记忆，用 ` + "`memory`" + ` �
 // comes. It must not send the agent searching for something to confirm.
 func questions(turn string) string {
 	return `- ` + turn + `有没有换一个新会话还用得上的东西？按开头 [Memory] 说的标准：记学到了什么，不记发生了什么。有就 ` + write + `，一条一句；用户要你记住的，一定记。
-- ` + turn + `靠 ` + "`memory search`" + ` 查到的记忆作答或做事了吗？没发现问题就 ` + "`memory confirm <id>`" + `，对照原始来源核实过就加 ` + "`--outcome verified`" + `；发现它错了：知道现状就 ` + "`memory add \"…\" --supersedes <id>`" + `，只知道它不对就 ` + "`memory confirm <id> --outcome contradicted --note \"…\"`" + `。没用到就跳过，不要为此再去查。`
+- ` + turn + `靠 ` + "`memory search`" + ` 查到的记忆作答了吗？没问题就 ` + "`memory confirm <id>`" + `，核实过加 ` + "`--outcome verified`" + `；内容错了：知道现状就 ` + "`memory add \"…\" --supersedes <id>`" + `，只知道不对就 ` + "`memory confirm <id> --outcome contradicted --note \"…\"`" + `；只是类型写错就 ` + "`memory edit <id> --kind <类型>`" + `（id 不变）。没用到就跳过，不要为此再去查。`
 }
 
 // LastTurn comes with the person's next message (Claude Code, Codex): look

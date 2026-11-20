@@ -76,7 +76,7 @@ func TestUsageHelpAndCheckAreMadeFromTheSameFlags(t *testing.T) {
 }
 
 var (
-	exampleCommand = regexp.MustCompile(`memory (search|add|confirm|show|list|archive|restore|delete)\b([^\n#]*)`)
+	exampleCommand = regexp.MustCompile(`memory (search|add|edit|confirm|show|list|archive|restore|delete)\b([^\n#]*)`)
 	flagInText     = regexp.MustCompile(`--([a-z][a-z-]*)`)
 	quoted         = regexp.MustCompile(`"[^"\n]*"`)
 )

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -135,3 +136,69 @@ func TestKindAndKeywordsAreTidied(t *testing.T) {
 		t.Fatalf("keywords %q", got)
 	}
 }
+
+// An update corrects a memory where it stands: the same id, the same history,
+// the same age, the same project — a rewrite from another directory would
+// otherwise move it there — and the index follows the new words.
+func TestUpdateCorrectsAMemoryInPlace(t *testing.T) {
+	s := open(t)
+	other := "/work/other"
+	r := write(t, s, Draft{Content: "城镇化率用常住口径，因为户籍口径不可比", Kind: KindFact, Keywords: []string{"urbanization"}, Project: &other})
+	if _, err := s.Confirm([]int64{r.ID}, OutcomeUsed, ""); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.Entry(r.ID)
+
+	kind := KindDecision
+	m, err := s.Update(r.ID, Edit{Kind: kind, Keywords: []string{"统计口径"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.ID != r.ID || m.Kind != KindDecision || m.CreatedAt != r.CreatedAt {
+		t.Fatalf("edit changed more than the kind: %+v", m)
+	}
+	if m.Project == nil || *m.Project != other {
+		t.Fatalf("the project became %v", m.Project)
+	}
+	if strings.Join(m.Keywords, ",") != "统计口径" {
+		t.Fatalf("keywords %q", m.Keywords)
+	}
+	after, _ := s.Entry(r.ID)
+	if after.Uses != got.Uses {
+		t.Fatalf("the history was lost: %d uses became %d", got.Uses, after.Uses)
+	}
+	// The new keyword finds it; the old one no longer does.
+	if hits, _ := s.Search("统计口径", nil, 5); len(hits) != 1 || hits[0].ID != r.ID {
+		t.Fatalf("new keyword: %d hits", len(hits))
+	}
+	if hits, _ := s.Search("urbanization", nil, 5); len(hits) != 0 {
+		t.Fatalf("old keyword still returns it: %d hits", len(hits))
+	}
+}
+
+// A short memory can have its kind put right; only new text is held to the
+// rules a new memory meets.
+func TestUpdateHoldsOnlyNewTextToTheGate(t *testing.T) {
+	s := open(t)
+	r := write(t, s, Draft{Content: "提交信息用中文", Kind: KindFact})
+	if _, err := s.Update(r.ID, Edit{Kind: KindRule}); err != nil {
+		t.Fatalf("a short memory's kind: %v", err)
+	}
+	short := "好"
+	if _, err := s.Update(r.ID, Edit{Content: &short}); !errors.Is(err, ErrRefused) {
+		t.Fatalf("new text too short: %v", err)
+	}
+	bad := "unknown"
+	if _, err := s.Update(r.ID, Edit{Kind: bad}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("an unknown kind: %v", err)
+	}
+	if _, err := s.Update(999, Edit{Kind: KindRule}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("an id nobody has: %v", err)
+	}
+	// The text of one memory is not a repeat of itself.
+	if _, err := s.Update(r.ID, Edit{Content: ptr("提交信息用中文")}); err != nil {
+		t.Fatalf("rewriting the same text: %v", err)
+	}
+}
+
+func ptr(s string) *string { return &s }

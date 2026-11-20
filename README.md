@@ -46,6 +46,7 @@ curl -fsSL https://raw.githubusercontent.com/river-ranx/Personal-Memory-Plugin/m
 ```sh
 memory search 报销 流程 OA [--limit N]
 memory add "<一句话>" --kind rule|decision|preference|practice|fact [--keywords a,b,c] [--supersedes ID]
+memory edit <id> [--kind K] [--keywords a,b,c] [--content TEXT]   # 原地改，id 不变
 memory confirm <id…> [--outcome used|verified|contradicted] [--note N]
 memory show <id> | list [--kind K] [--archived] [--limit N]
 memory archive <id…> | restore <id…> | delete <id…>
@@ -74,6 +75,8 @@ memory --help | memory <命令> --help
 
 - 正文和 `--kind` 必填（取代旧记忆时类型可省，沿用旧的）；一条最多 1000 字。类型以前默认 `fact`，
   结果 Agent 几乎从不写，用户偏好也被记成会过时的 `fact`，所以改成必须选。
+- 写错了（类型、关键词、错字）用 `memory edit <id>` 原地改，不换 id、不改写入时间、不换项目；内容变了才用
+  `--supersedes`。取代时旧记忆的项目、类型、关键词都会继承，不再被当前目录悄悄改掉。
 - 关键词去重、最多 10 个，权重是正文的两倍。正文本来就逐词可搜，关键词只在补正文里没有的词（同义词、
   另一种语言的叫法、缩写）时有用；全在正文里的关键词照样存下，但答复会点出来。
 - 没有标题：正文就一句话、结果里整句显示，标题只会重复正文开头。早期的库打开时自动迁移：标题的词并入关键词，

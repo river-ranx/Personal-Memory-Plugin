@@ -217,8 +217,12 @@ func TestSupersedingAndConfirmingTakeIDs(t *testing.T) {
 	if !strings.Contains(out, "#"+fresh+" ·") || strings.Contains(out, "#"+old+" ·") {
 		t.Fatalf("only the newer one is returned: %q", out)
 	}
-	if _, out := r.memory("", "list"); !strings.Contains(out, "superseded by #"+fresh) {
-		t.Fatalf("a list shows what was replaced: %q", out)
+	// A list shows what is current, as a search does; --all adds what was replaced.
+	if _, out := r.memory("", "list"); strings.Contains(out, "#"+old+" ·") {
+		t.Fatalf("a list shows a replaced memory: %q", out)
+	}
+	if _, out := r.memory("", "list", "--all"); !strings.Contains(out, "superseded by #"+fresh) {
+		t.Fatalf("list --all shows what was replaced: %q", out)
 	}
 	if code, out := r.memory("", "confirm", fresh, "--outcome", "verified"); code != 0 || out != "Recorded.\n" {
 		t.Fatalf("confirm: %d %q", code, out)
@@ -481,5 +485,185 @@ func TestAnOldFactSaysItMayBeOutOfDate(t *testing.T) {
 	}
 	if strings.Contains(headers["#2"], "out of date") || strings.Contains(headers["#3"], "out of date") {
 		t.Errorf("an old rule or a new fact: %q %q", headers["#2"], headers["#3"])
+	}
+}
+
+// A memory written with the wrong kind is corrected where it stands: the same
+// id (so what cites #1 still does), the same project — even from another
+// directory — and no new memory to supersede it.
+func TestAMemoryIsCorrectedInPlaceNotReplaced(t *testing.T) {
+	r := newRun(t)
+	r.add("城镇化率用常住口径，因为户籍口径不可比", "--project", "/work/stats")
+	if code, out := r.memory("", "edit", "1", "--kind", "decision"); code != 0 || !strings.HasPrefix(out, "Updated #1.\n") || !strings.Contains(out, "#1 · decision ·") {
+		t.Fatalf("%d %q", code, out)
+	}
+	if _, out := r.memory("", "list"); strings.Contains(out, "#2 ·") {
+		t.Fatalf("editing made a new memory: %q", out)
+	}
+	if _, out := r.memory("", "show", "1"); !strings.Contains(out, "/work/stats") {
+		t.Fatalf("the project moved: %q", out)
+	}
+	// Nothing to change is a misuse answered with the usage.
+	if code, out := r.memory("", "edit", "1"); code != 1 || !strings.Contains(out, "usage: memory edit") {
+		t.Fatalf("%d %q", code, out)
+	}
+	if code, out := r.memory("", "edit", "1", "--kind", "prefer"); code != 1 || !strings.Contains(out, "must be one of") {
+		t.Fatalf("a mistyped kind: %d %q", code, out)
+	}
+	if code, out := r.memory("", "edit", "99", "--kind", "rule"); code != 1 || !strings.Contains(out, "no such memory") {
+		t.Fatalf("an id nobody has: %d %q", code, out)
+	}
+	if code, out := r.memory("", "edit", "1", "--keywords", "-"); code != 0 {
+		t.Fatalf("clearing keywords: %d %q", code, out)
+	}
+	_, out := r.memory("", "show", "1", "--json")
+	if !strings.Contains(out, `"keywords":[]`) {
+		t.Fatalf("keywords not cleared: %q", out)
+	}
+}
+
+// A rewrite keeps the memory's project, and says so: an agent rewriting from
+// another directory would otherwise never learn the memory had a home.
+func TestARewriteKeepsTheProjectAndSaysSo(t *testing.T) {
+	r := newRun(t)
+	r.add("城镇化率用常住口径，因为户籍口径不可比", "--project", "/work/stats")
+	_, out := r.memory("", "add", "城镇化率一律用常住口径，因为 2018 年前后的户籍口径不可比", "--supersedes", "1")
+	if !strings.Contains(out, "keeps its project: /work/stats") {
+		t.Fatalf("%q", out)
+	}
+	if _, out := r.memory("", "show", "2"); !strings.Contains(out, "/work/stats") {
+		t.Fatalf("the project was not inherited: %q", out)
+	}
+}
+
+// --json carries what the text answer carries: keywords and counts, always a
+// number, and when it was last used.
+func TestTheJSONCarriesTheKeywordsAndTheCounts(t *testing.T) {
+	r := newRun(t)
+	r.add("发版只走 release 分支", "--kind", "rule", "--keywords", "上线")
+	_, out := r.memory("", "show", "1", "--json")
+	var got struct {
+		Memory struct {
+			Keywords             []string
+			Uses, Verified       *int
+			Contradicted         *int
+			LastUsed             string
+			Current, Superseding bool
+		} `json:"memory"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("%q: %v", out, err)
+	}
+	m := got.Memory
+	if len(m.Keywords) != 1 || m.Keywords[0] != "上线" {
+		t.Fatalf("keywords: %q", out)
+	}
+	if m.Uses == nil || m.Verified == nil || m.Contradicted == nil || *m.Uses != 0 {
+		t.Fatalf("counts are missing or zero-less: %q", out)
+	}
+	if !m.Current || m.Superseding {
+		t.Fatalf("current/superseding: %q", out)
+	}
+	r.memory("", "confirm", "1")
+	_, out = r.memory("", "show", "1", "--json")
+	if !strings.Contains(out, `"uses":1`) || !strings.Contains(out, `"lastUsed":"20`) {
+		t.Fatalf("a use is not in the JSON: %q", out)
+	}
+}
+
+// A limit that drops results says so; a typo in --kind is an error, not an
+// empty answer; a single character says why it cannot match.
+func TestASearchSaysWhenItShowsFewerThanItFoundAndWhy(t *testing.T) {
+	r := newRun(t)
+	for _, text := range []string{
+		"报销单据要在每月五号前交给财务",
+		"差旅报销需附上行程单和发票原件",
+		"招待费报销先由部门负责人签批",
+		"报销金额超过五千要附审批邮件",
+		"电子发票报销直接在 OA 里上传",
+		"报销被退回时先在系统里看清原因",
+		"跨月报销要有情况说明",
+	} {
+		r.add(text)
+	}
+	code, out := r.memory("", "search", "报销", "--limit", "100")
+	if code != 0 || strings.Contains(out, "matched; showing") {
+		t.Fatalf("seven match and all are shown, so there is nothing to say: %d %q", code, out)
+	}
+	_, out = r.memory("", "search", "报销", "--limit", "3")
+	if !strings.Contains(out, "7 matched; showing 3") {
+		t.Fatalf("a limit does not say what it left out: %q", out)
+	}
+	if code, out := r.memory("", "list", "--kind", "prefer"); code != 1 || !strings.Contains(out, "must be one of") {
+		t.Fatalf("a mistyped kind: %d %q", code, out)
+	}
+	if code, out := r.memory("", "search", "图"); code != 0 || !strings.Contains(out, "single character") {
+		t.Fatalf("%d %q", code, out)
+	}
+}
+
+// Keywords past the limit are named in the answer: silently losing a way to
+// find a memory is worse than refusing the write.
+func TestKeywordsPastTheLimitAreNamed(t *testing.T) {
+	r := newRun(t)
+	code, out := r.memory("", "add", "发版只走 release 分支，因为 main 不触发签名流水线", "--kind", "rule",
+		"--keywords", "a1,b2,c3,d4,e5,f6,g7,h8,i9,j10,k11,l12")
+	if code != 0 || !strings.Contains(out, "past the limit of 10 were not stored: k11, l12") {
+		t.Fatalf("%d %q", code, out)
+	}
+	_, out = r.memory("", "add", "staging 的数据库账号只读，写入要走变更工单", "--kind", "rule",
+		"--keywords", "a1,b2,c3,d4,e5,f6,g7,h8,i9,j10,k11", "--json")
+	if !strings.Contains(out, `"keywordsDropped":["k11"]`) {
+		t.Fatalf("%q", out)
+	}
+}
+
+// A list shows what is current, as a search does; --all adds what was
+// replaced, and names what replaced it.
+func TestAListShowsWhatIsCurrentUnlessAsked(t *testing.T) {
+	r := newRun(t)
+	r.add("签名由开发者本机完成")
+	r.add("签名已改由 CI 完成", "--supersedes", "1")
+	if _, out := r.memory("", "list"); strings.Contains(out, "#1 ·") {
+		t.Fatalf("a replaced memory is listed: %q", out)
+	}
+	if _, out := r.memory("", "list", "--all"); !strings.Contains(out, "superseded by #2") {
+		t.Fatalf("--all does not name what replaced it: %q", out)
+	}
+}
+
+// A shell splits an unquoted --keywords value on its space; the words after
+// the first are keywords too, not a tail of the memory's text.
+func TestWordsSplitFromKeywordsStayKeywords(t *testing.T) {
+	r := newRun(t)
+	r.add("标点统一用全角，中英文之间不加空格", "--keywords", "别名", "punctuation", "--keywords", "typography")
+	_, out := r.memory("", "show", "1")
+	if !strings.Contains(out, "keywords: 别名, punctuation, typography") {
+		t.Fatalf("keywords: %q", out)
+	}
+	if strings.Contains(out, "空格punctuation") || strings.Contains(out, "空格 typography") {
+		t.Fatalf("a keyword was appended to the text: %q", out)
+	}
+	// edit takes one positional, the id: words after --keywords never become
+	// a second id.
+	if code, out := r.memory("", "edit", "1", "--keywords", "别名", "alias"); code != 0 {
+		t.Fatalf("%d %q", code, out)
+	}
+	if _, out := r.memory("", "show", "1", "--json"); !strings.Contains(out, `"keywords":["别名","alias"]`) {
+		t.Fatalf("%q", out)
+	}
+}
+
+// The flags may come before the text: --keywords there takes its one value,
+// and every word after it is the text, not more keywords. (The command's own
+// name is not a positional, or this would look like a text already given.)
+func TestFlagsBeforeTheText(t *testing.T) {
+	r := newRun(t)
+	if code, out := r.memory("", "add", "--keywords", "别名", "报销流程", "怎么写", "--kind", "practice"); code != 0 {
+		t.Fatalf("%d %q", code, out)
+	}
+	_, out := r.memory("", "show", "1")
+	if !strings.Contains(out, "\n报销流程 怎么写\n") || !strings.Contains(out, "keywords: 别名") {
+		t.Fatalf("text or keywords: %q", out)
 	}
 }

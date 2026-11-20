@@ -54,8 +54,11 @@ func insert(tx *sql.Tx, d Draft, now uint64) (int64, error) {
 		if err != nil {
 			return 0, err
 		}
-		if old.State != StateActive || old.SupersededBy != nil {
-			return 0, invalid("the memory it supersedes is archived or already superseded")
+		if old.State != StateActive {
+			return 0, invalid("%s is archived: restore it first, or write a new memory without --supersedes", FormatID(old.ID))
+		}
+		if old.SupersededBy != nil {
+			return 0, invalid("%s was replaced by %s: supersede %s instead", FormatID(old.ID), FormatID(*old.SupersededBy), FormatID(*old.SupersededBy))
 		}
 		// An agent rewording a memory says the new text; what it was, and
 		// the words it was found by, carry over.
@@ -129,6 +132,77 @@ func (s *Store) Delete(id int64) error {
 		_, err := tx.Exec("DELETE FROM memories WHERE id = ?1", id)
 		return err
 	})
+}
+
+// Edit is what [Store.Update] changes about a memory. A field left out keeps
+// what the memory has: Content nil, Kind empty, Keywords nil. Keywords that
+// are not nil replace the list, so an empty one clears it.
+type Edit struct {
+	Content  *string
+	Kind     string
+	Keywords []string
+}
+
+// Update corrects a memory in place: same id, same history, same age. It is
+// for a memory written wrong — another kind, a missing keyword, a typo — not
+// for what has changed since, which is a new memory superseding this one (the
+// old one stays as it was, and the new one is dated today).
+//
+// Only new text passes the gate and the duplicate check: a memory that is
+// short or repeats another does not stop its kind being put right. An
+// archived memory stays archived, and a replaced one stays replaced.
+func (s *Store) Update(id int64, e Edit) (Record, error) {
+	err := s.inTx(func(tx *sql.Tx) error {
+		old, err := load(tx, id)
+		if err != nil {
+			return err
+		}
+		d := Draft{Content: old.Content, Kind: old.Kind, Keywords: old.Keywords, Project: old.Project}
+		if e.Content != nil {
+			d.Content = *e.Content
+		}
+		if e.Kind != "" {
+			d.Kind = e.Kind
+		}
+		if e.Keywords != nil {
+			d.Keywords = e.Keywords
+		}
+		d, err = d.normalize()
+		if err != nil {
+			return err
+		}
+		if d.Content != old.Content {
+			if err := screen(d); err != nil {
+				return err
+			}
+			existing, err := duplicates(tx, d)
+			if err != nil {
+				return err
+			}
+			same := existing[:0]
+			for _, r := range existing {
+				if r.ID != id {
+					same = append(same, r)
+				}
+			}
+			if len(same) > 0 {
+				return &Duplicate{Existing: same}
+			}
+		}
+		_, err = tx.Exec(`UPDATE memories SET content = ?2, kind = ?3, keywords = ?4 WHERE id = ?1`,
+			id, d.Content, d.Kind, strings.Join(d.Keywords, " "))
+		if err != nil {
+			return err
+		}
+		if err := unindex(tx, id); err != nil {
+			return err
+		}
+		return index(tx, id, d.Keywords, d.Content)
+	})
+	if err != nil {
+		return Record{}, err
+	}
+	return load(s.db, id)
 }
 
 // Outcome is what an agent found when it relied on or checked a memory.

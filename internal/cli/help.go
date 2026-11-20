@@ -32,7 +32,7 @@ var everyCommand = []flagSpec{
 	{"json", "", "print the answer as JSON"},
 }
 
-var commandOrder = []string{"search", "add", "confirm", "show", "list", "archive", "restore", "delete"}
+var commandOrder = []string{"search", "add", "edit", "confirm", "show", "list", "archive", "restore", "delete"}
 
 // usage is the command's usage line, made from its flags.
 func (sp spec) usage(name string) string {
@@ -147,7 +147,10 @@ var commands = map[string]spec{
 	"search": {
 		summary: "find memories relevant to some words",
 		args:    "<words...>",
-		flags:   []flagSpec{{"limit", "N", "how many to return (default 5, at most 20)"}},
+		flags: []flagSpec{
+			{"limit", "N", "how many to return (default 5, at most 20)"},
+			{"kind", "KIND", "only this kind (rule | decision | preference | practice | fact)"},
+		},
 		help: `
 WHAT IT DOES
   Cuts the words into terms and returns the memories that contain any of them,
@@ -166,11 +169,18 @@ WHAT IT DOES
 OUTPUT
   At most --limit results, best first; each is a header line and then the text
   as written, with a blank line between results (see READING RESULTS in
-  memory --help). Nothing found prints "No memories match." and what to try.
+  memory --help). When more matched than --limit shows, a last line says how
+  many ("34 matched; showing 5"). Nothing found prints "No memories match." and
+  what to try; a one-character Chinese word says why it cannot match.
+
+--kind
+  Only memories of that kind:  memory search 报销 --kind rule. A kind that is
+  not one of the five is an error, not an empty answer.
 
 TIPS
   - A few specific words beat a sentence.
   - One query may carry two topics; a memory matching either is found.
+  - Chinese is cut in two-character pieces, so a single character finds nothing.
   - Nothing found: try a synonym, the English name, another name for the thing
     (a module, a person's role, an institution), or fewer words. If that finds nothing either, there is nothing to find.
   - A result is a lead, not evidence: check what you can before acting on it
@@ -261,6 +271,51 @@ EXAMPLES
   memory add "访谈稿统一由课题组自己转录，不再外包" --supersedes 12`,
 		run: command.add,
 	},
+	"edit": {
+		summary: "correct a memory in place: its kind, keywords or text",
+		args:    "<id>",
+		flags: []flagSpec{
+			{"kind", "KIND", "the kind it should have had: rule | decision | preference | practice | fact"},
+			{"keywords", "a,b,c", "replace its keywords with these, at most 10 (--keyword is the same and may repeat); `--keywords -` clears them"},
+			{"content", "TEXT", "replace its text (give \"-\" to read it from stdin)"},
+		},
+		aliases: []string{"keyword"},
+		help: `
+WHAT IT DOES
+  Corrects a memory that was written wrong — the wrong kind, a missing keyword,
+  a typo. It keeps the id, the history and the age, so what other memories,
+  notes and sessions cite stays valid. Nothing in it says the memory has
+  changed: for that, add a new memory with --supersedes (see SUPERSEDING in
+  the help of add),
+  which leaves this one as it was and dates the new one today.
+
+FIELDS
+  A field left out is not changed. --keywords replaces the whole list; give
+  the words it should now have, not only the new one. --keywords - clears it.
+  --content replaces the text, and is held to the same rules as add: at least
+  3 words, and not a repeat of another memory. Changing only the kind, or only
+  the keywords, is allowed even if the text is short.
+
+WHAT IS KEPT
+  The id, when it was written, how it was used, and whether it is verified,
+  contradicted, archived or replaced. A replaced memory is not made current
+  again: supersede the memory that replaced it instead.
+
+ANSWERS
+  Updated #12.                    then the memory as a search shows it.
+  Not stored: invalid memory: …   unknown kind, empty text, or nothing to change.
+  Not stored: refused: …          new text too short to be a memory.
+  Not stored: already remembered   the new text repeats another memory; the
+                                  answer names it.
+  With --json the same, as {"memory": …} or {"error": …, "message": …}.
+
+EXAMPLES
+  memory edit 12 --kind preference
+  memory edit 12 --keywords 汇报,review,季报
+  memory edit 12 --keywords -
+  memory edit 12 --content "周报先给组长过目再发全组，她要先核对数字"`,
+		run: command.edit,
+	},
 	"confirm": {
 		summary: "report that a memory was used, checked, or found wrong",
 		args:    "<id...>",
@@ -323,19 +378,23 @@ EXAMPLES
 		flags: []flagSpec{
 			{"kind", "KIND", "only this kind"},
 			{"archived", "", "list the archived ones instead of the active ones"},
+			{"all", "", "also list the memories a newer one replaced"},
 			{"limit", "N", "how many to list (default 50, at most 200)"},
 		},
 		help: `
 WHAT IT DOES
   Lists memories newest first, in the same form as search. It is for looking
   through the store, so it does not rank, and it does not count as a use.
-  Unlike search it also lists memories a newer one replaced (marked
-  "superseded by #N"). With --project DIR it lists only that project's memories:
-  written from DIR, a directory inside it, or one containing it.
+  Like search it leaves out what is not current: archived memories, and ones a
+  newer one replaced. --all adds the replaced ones, marked "superseded by #N";
+  --archived lists the archived ones instead. With --project DIR it lists only
+  that project's memories: written from DIR, a directory inside it, or one
+  containing it.
 
 EXAMPLES
   memory list
   memory list --kind rule --limit 20
+  memory list --all
   memory list --archived`,
 		run: command.list,
 	},
@@ -451,6 +510,7 @@ TYPICAL USE
   memory add "季度复盘材料先给王总过目再发全员" --kind preference --keywords 汇报,review,季报
   memory confirm 12                   you used #12 and it held up
   memory add "<new text>" --supersedes 12   what #12 says has changed
+  memory edit 12 --kind preference    #12 was written with the wrong kind: fixed in place
 
 READING RESULTS
   A result is a header line, then the text as written; results are separated by a

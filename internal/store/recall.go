@@ -65,22 +65,44 @@ type Counts struct {
 // project only reorders: a memory from another project still shows, ranked
 // lower, because filtering would hide exactly the lesson that generalises.
 func (s *Store) Search(query string, project *string, limit int) ([]Hit, error) {
+	found, err := s.Find(query, project, "", limit)
+	return found.Hits, err
+}
+
+// SearchKind is [Store.Search] with memories of one kind only, when kind is
+// named: the answer to "what rules do I have about this?".
+func (s *Store) SearchKind(query string, project *string, kind string, limit int) ([]Hit, error) {
+	found, err := s.Find(query, project, kind, limit)
+	return found.Hits, err
+}
+
+// Found is a search's answer: the memories returned, and how many the query
+// matched in all. A caller that shows fewer than matched says so: a limit
+// that silently drops results looks like a memory that is not there.
+type Found struct {
+	Hits    []Hit
+	Matched int
+}
+
+// Find is [Store.Search] with the count of everything the query matched,
+// before the limit.
+func (s *Store) Find(query string, project *string, kind string, limit int) (Found, error) {
 	now := s.now()
-	hits, err := s.recall(query, project, min(max(limit, 1), MaxSearchLimit), now)
+	hits, matched, err := s.recall(query, project, kind, min(max(limit, 1), MaxSearchLimit), now)
 	if err != nil || len(hits) == 0 {
-		return hits, err
+		return Found{Hits: hits, Matched: matched}, err
 	}
 	ids := make([]int64, len(hits))
 	for i, h := range hits {
 		ids[i] = h.ID
 	}
-	return hits, s.recordHits(ids, now)
+	return Found{Hits: hits, Matched: matched}, s.recordHits(ids, now)
 }
 
-func (s *Store) recall(query string, project *string, limit int, now uint64) ([]Hit, error) {
+func (s *Store) recall(query string, project *string, kind string, limit int, now uint64) ([]Hit, int, error) {
 	terms := searchTerms(query)
 	if len(terms) == 0 || limit <= 0 {
-		return []Hit{}, nil
+		return []Hit{}, 0, nil
 	}
 	// The best matches are picked inside FTS5 first — its `rank` column with
 	// the weights set lets it keep only the top ones while it scans — and
@@ -91,11 +113,11 @@ func (s *Store) recall(query string, project *string, limit int, now uint64) ([]
                       WHERE memories_fts MATCH ?1 AND rank MATCH ?2
                       ORDER BY rank LIMIT ?3) AS best
                JOIN memories m ON m.id = best.memory_id
-              WHERE m.state = 'active' AND NOT `+replaced+`
+              WHERE m.state = 'active' AND NOT `+replaced+` AND (?5 = '' OR m.kind = ?5)
               ORDER BY best.score
-              LIMIT ?4`, matchQuery(terms), bm25Rank, 2*candidateLimit, candidateLimit)
+              LIMIT ?4`, matchQuery(terms), bm25Rank, 2*candidateLimit, candidateLimit, kind)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	type candidate struct {
 		Record
@@ -107,14 +129,24 @@ func (s *Store) recall(query string, project *string, limit int, now uint64) ([]
 		r, err := scanRecord(rows, &c.bm25)
 		if err != nil {
 			rows.Close()
-			return nil, err
+			return nil, 0, err
 		}
 		c.Record = r
 		candidates = append(candidates, c)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, 0, err
+	}
+	// How many the query matched in all, before the limit — asked after the
+	// rows are closed, since the store has one connection.
+	var matched int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM memories_fts
+                              JOIN memories m ON m.id = memories_fts.memory_id
+                             WHERE memories_fts MATCH ?1 AND m.state = 'active'
+                               AND NOT `+replaced+` AND (?2 = '' OR m.kind = ?2)`,
+		matchQuery(terms), kind).Scan(&matched); err != nil {
+		return nil, 0, err
 	}
 	best := 0.0
 	for _, c := range candidates {
@@ -122,7 +154,7 @@ func (s *Store) recall(query string, project *string, limit int, now uint64) ([]
 	}
 	var corpus int
 	if err := s.db.QueryRow("SELECT COUNT(*) FROM memories m WHERE m.state = 'active' AND NOT " + replaced).Scan(&corpus); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if corpus >= weakMatchCorpus {
 		// bm25 is negative, stronger is lower: keep what is at least weakMatch
@@ -135,7 +167,7 @@ func (s *Store) recall(query string, project *string, limit int, now uint64) ([]
 	}
 	allCounts, err := countsOf(s.db, ids, now)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	hits := make([]Hit, 0, len(candidates))
 	for _, c := range candidates {
@@ -163,7 +195,7 @@ func (s *Store) recall(query string, project *string, limit int, now uint64) ([]
 	if len(hits) > limit {
 		hits = hits[:limit]
 	}
-	return hits, nil
+	return hits, matched, nil
 }
 
 // Entry is one memory with its counts and decay.
@@ -185,9 +217,12 @@ const MaxListLimit = 200
 // ListQuery is what a list asks for; empty fields are any.
 type ListQuery struct {
 	Archived bool
-	Kind     string
-	Project  string
-	Limit    int
+	// All lists the memories a newer one replaced too, marked as such; by
+	// default a list shows what is current, as a search does.
+	All     bool
+	Kind    string
+	Project string
+	Limit   int
 }
 
 // List is the memories q asks for, newest first, each with its counts and
@@ -204,7 +239,8 @@ func (s *Store) List(q ListQuery) ([]Hit, error) {
 	}
 	rows, err := s.db.Query(`SELECT `+recordColumns+` FROM memories m
                               WHERE m.state = ?1 AND (?2 = '' OR m.kind = ?2)
-                              ORDER BY m.created_at DESC, m.id DESC`, state, q.Kind)
+                                AND (?3 OR NOT `+replaced+`)
+                              ORDER BY m.created_at DESC, m.id DESC`, state, q.Kind, q.All)
 	if err != nil {
 		return nil, err
 	}

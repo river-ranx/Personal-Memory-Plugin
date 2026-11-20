@@ -96,6 +96,12 @@ func (d Draft) inherit(old Record) Draft {
 	if len(cleanKeywords(d.Keywords)) == 0 {
 		d.Keywords = old.Keywords
 	}
+	// A memory rewritten from elsewhere keeps the project it belonged to: the
+	// working directory a command happens to run in says nothing about where
+	// the memory applies.
+	if d.Project == nil {
+		d.Project = old.Project
+	}
 	return d
 }
 
@@ -119,18 +125,32 @@ func (d Draft) normalize() (Draft, error) {
 	return d, nil
 }
 
-// cleanKeywords is the words in keywords, once each (case aside), at most
-// KeywordLimit of them: a phrase is its words, which is how the index holds it.
+// cleanKeywords is what a memory keeps of keywords: see [CleanKeywords].
 func cleanKeywords(keywords []string) []string {
-	out := []string{}
+	kept, _ := CleanKeywords(keywords)
+	return kept
+}
+
+// CleanKeywords splits keywords into the words a memory keeps — once each,
+// case aside, at most [KeywordLimit] — and the words beyond the limit, in the
+// order written. A phrase is its words, which is how the index holds it. The
+// command line says what was dropped: a keyword silently lost is a way to find
+// a memory that the writer thinks is there.
+func CleanKeywords(keywords []string) (kept, dropped []string) {
+	kept, dropped = []string{}, []string{}
 	for _, k := range keywords {
 		for _, word := range strings.Fields(k) {
-			if len(out) < KeywordLimit && !slices.ContainsFunc(out, func(o string) bool { return strings.EqualFold(o, word) }) {
-				out = append(out, word)
+			if slices.ContainsFunc(kept, func(o string) bool { return strings.EqualFold(o, word) }) {
+				continue
+			}
+			if len(kept) < KeywordLimit {
+				kept = append(kept, word)
+			} else {
+				dropped = append(dropped, word)
 			}
 		}
 	}
-	return out
+	return kept, dropped
 }
 
 // supersededBy is SQL for the newest memory in use that replaced this one, on

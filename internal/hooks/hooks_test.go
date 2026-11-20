@@ -103,14 +103,15 @@ func TestThePromptLeavesTheJudgmentToTheAgent(t *testing.T) {
 	}
 	// The prompt shows a write with both flags and says how to fill them: what
 	// the prompt does not show, agents leave out.
-	for _, want := range []string{write, kinds, keywords, example} {
+	for _, want := range []string{write, kinds, keywords, fix, example} {
 		if !strings.Contains(Note, want) {
 			t.Fatalf("the prompt does not say how to fill a write's flags: lacks %q", want)
 		}
 	}
 	// Once a session, so it may take the room to set the write out on lines of
-	// its own, with an example; it may not grow past that.
-	if n := len([]rune(Note)); n > 780 {
+	// its own, with an example, and the two ways to fix one; it may not grow
+	// past that.
+	if n := len([]rune(Note)); n > 830 {
 		t.Fatalf("the prompt is %d characters: it goes in front of every session", n)
 	}
 }
@@ -229,7 +230,9 @@ func TestTheReviewsAskAndLetGo(t *testing.T) {
 				t.Fatalf("%s lacks %q:\n%s", name, want, text)
 			}
 		}
-		if n := len([]rune(text)); n > 450 {
+		// A review comes with every turn, so it stays one sentence per question;
+		// 500 characters is that with the three ways a memory can be wrong.
+		if n := len([]rune(text)); n > 500 {
 			t.Fatalf("%s is %d characters: it comes with every turn", name, n)
 		}
 	}

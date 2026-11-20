@@ -17,7 +17,7 @@ import (
 // a command or a number, it must be the one the tool has.
 
 var (
-	skillCommand = regexp.MustCompile("memory (search|add|confirm|show|list|archive|restore|delete)\\b([^\\n#|`]*)")
+	skillCommand = regexp.MustCompile("memory (search|add|edit|confirm|show|list|archive|restore|delete)\\b([^\\n#|`]*)")
 	fenced       = regexp.MustCompile("(?s)```.*?```")
 	inlineFlag   = regexp.MustCompile("`(?:[^`]* )?--([a-z][a-z-]*)[^`]*`")
 )

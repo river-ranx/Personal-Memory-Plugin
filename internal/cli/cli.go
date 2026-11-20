@@ -130,6 +130,13 @@ func dispatch(args []string, env Env) error {
 		return fmt.Errorf("unknown command %q. Commands: %s. Run `memory --help`", args[0], strings.Join(commandOrder, ", "))
 	}
 	err := func() error {
+		if args[0] == "add" || args[0] == "edit" {
+			// The command's own name is not a positional argument: folding it
+			// in would look like the text was already given, and the words
+			// after --keywords of a command with the flags first would be
+			// swallowed as keywords instead of being the text.
+			args = append([]string{args[0]}, foldKeywordSpill(args[1:])...)
+		}
 		flags, positional, err := parseFlags(args[1:])
 		if err != nil {
 			return err
@@ -221,19 +228,43 @@ func (c command) search() error {
 	if err != nil {
 		return err
 	}
-	project := c.project()
-	hits, err := c.s.Search(query, project, limit)
+	kind, err := c.kind()
 	if err != nil {
 		return err
 	}
+	project := c.project()
+	found, err := c.s.Find(query, project, kind, limit)
+	if err != nil {
+		return err
+	}
+	hits := found.Hits
+	shown := min(limit, store.MaxSearchLimit)
 	if c.flags.has("json") {
-		return c.json(map[string]any{"memories": views(hits)})
+		return c.json(map[string]any{"memories": views(hits), "matched": found.Matched, "limit": shown})
 	}
 	if len(hits) == 0 {
-		fmt.Fprintln(c.env.Stdout, "No memories match. Try other words: a synonym, the English name, another name for the thing — or fewer words.")
+		fmt.Fprintln(c.env.Stdout, c.noMatch(query, kind))
 	}
 	c.printAll(hits, project)
+	if found.Matched > len(hits) {
+		fmt.Fprintf(c.env.Stdout, "\n%d matched; showing %d (--limit goes up to %d).\n", found.Matched, len(hits), store.MaxSearchLimit)
+	}
 	return nil
+}
+
+// noMatch is what to try when a search found nothing. A one-character Chinese
+// query is not a word the search has: it cuts Chinese into two-character
+// windows, so 图 matches nothing however much 图 is in the store. Saying that
+// is better than sending the agent to try a synonym of a query that cannot
+// work.
+func (c command) noMatch(query, kind string) string {
+	if len([]rune(strings.TrimSpace(query))) == 1 {
+		return "No memories match. A single character is too short to search with: give a two-character word (图片, 图表), or a word or two more."
+	}
+	if kind != "" {
+		return fmt.Sprintf("No memories of kind %s match. Try other words, or leave out --kind: a synonym, the English name, another name for the thing — or fewer words.", kind)
+	}
+	return "No memories match. Try other words: a synonym, the English name, another name for the thing — or fewer words."
 }
 
 func (c command) add() error {
@@ -258,6 +289,12 @@ func (c command) add() error {
 			return err
 		}
 		d.Supersedes = &id
+		// A rewrite keeps the memory's project unless --project says otherwise:
+		// the directory this happens to run in does not decide where a memory
+		// belonged, and filling it in here would silently move the memory.
+		if !c.flags.has("project") {
+			d.Project = nil
+		}
 	}
 	// The kind says how a later session treats the memory, and left to a
 	// default it was left to chance: an agent's own reading of "the person
@@ -303,14 +340,29 @@ func (c command) add() error {
 	// Keywords that only repeat the text are stored all the same; saying so
 	// teaches the next write what a keyword is for.
 	inText := store.KeywordsInText(m.Content, d.Keywords)
+	_, dropped := store.CleanKeywords(d.Keywords)
 	if c.flags.has("json") {
 		answer := map[string]any{"memory": view(store.Hit{Record: m, Decay: 1})}
 		if len(inText) > 0 {
 			answer["keywordsInText"] = inText
 		}
+		if len(dropped) > 0 {
+			answer["keywordsDropped"] = dropped
+		}
 		return c.json(answer)
 	}
 	fmt.Fprintf(c.env.Stdout, "Stored %s.\n", store.FormatID(m.ID))
+	if d.Supersedes != nil {
+		// A rewrite keeps the project the memory belonged to, whatever
+		// directory it runs in; say so when that is not where it runs, since
+		// the answer would otherwise leave it to be assumed.
+		if m.Project != nil && !store.SameProject(*m.Project, c.env.Cwd) {
+			fmt.Fprintf(c.env.Stdout, "It replaces %s and keeps its project: %s.\n", store.FormatID(*d.Supersedes), *m.Project)
+		}
+	}
+	if len(dropped) > 0 {
+		fmt.Fprintf(c.env.Stdout, "Keywords past the limit of %d were not stored: %s.\n", store.KeywordLimit, strings.Join(dropped, ", "))
+	}
 	if len(inText) > 0 {
 		fmt.Fprintf(c.env.Stdout, "Keywords already in the text add nothing to finding it: %s. Next time give words the text lacks — a synonym, the name in another language, an abbreviation.\n", strings.Join(inText, ", "))
 	}
@@ -379,7 +431,7 @@ func (c command) show() error {
 		return err
 	}
 	if c.flags.has("json") {
-		return c.json(map[string]any{"memory": view(h)})
+		return c.json(map[string]any{"memory": detailed(h)})
 	}
 	c.printAll([]store.Hit{h}, c.project())
 	fmt.Fprintf(c.env.Stdout, "keywords: %s · last 30 days: used %d, verified %d, contradicted %d\n",
@@ -392,19 +444,100 @@ func (c command) list() error {
 	if err != nil {
 		return err
 	}
+	kind, err := c.kind()
+	if err != nil {
+		return err
+	}
 	hits, err := c.s.List(store.ListQuery{
-		Archived: c.flags.has("archived"), Kind: c.flags.one("kind"), Project: c.flags.one("project"), Limit: limit,
+		Archived: c.flags.has("archived"), All: c.flags.has("all"), Kind: kind, Project: c.flags.one("project"), Limit: limit,
 	})
 	if err != nil {
 		return err
 	}
 	if c.flags.has("json") {
-		return c.json(map[string]any{"memories": views(hits)})
+		detailedHits := make([]detailedView, len(hits))
+		for i, h := range hits {
+			detailedHits[i] = detailed(h)
+		}
+		return c.json(map[string]any{"memories": detailedHits})
 	}
 	if len(hits) == 0 {
-		fmt.Fprintln(c.env.Stdout, "No memories.")
+		if kind != "" {
+			fmt.Fprintf(c.env.Stdout, "No memories of kind %s.\n", kind)
+		} else {
+			fmt.Fprintln(c.env.Stdout, "No memories.")
+		}
 	}
 	c.printAll(hits, c.project())
+	return nil
+}
+
+// edit corrects a memory in place: same id, same history, same project. It is
+// for what was written wrong, not for what has changed.
+func (c command) edit() error {
+	if len(c.args) != 1 {
+		return usageErr("edit takes one memory id")
+	}
+	id, err := parseID(c.args[0])
+	if err != nil {
+		return err
+	}
+	e := store.Edit{Kind: c.flags.one("kind")}
+	if e.Kind != "" {
+		if e.Kind, err = c.kind(); err != nil {
+			return err
+		}
+	}
+	if text := c.flags.one("content"); text != "" {
+		if text == "-" {
+			b, err := io.ReadAll(c.env.Stdin)
+			if err != nil {
+				return err
+			}
+			text = string(b)
+		}
+		e.Content = &text
+	}
+	keywords := append(c.flags.all("keywords"), c.flags.all("keyword")...)
+	if len(keywords) > 0 {
+		words := splitWords(keywords)
+		if len(words) == 1 && words[0] == "-" {
+			words = []string{}
+		}
+		e.Keywords = words
+	}
+	if e.Content == nil && e.Kind == "" && e.Keywords == nil {
+		return usageErr("edit needs something to change: --kind, --keywords or --content")
+	}
+	m, err := c.s.Update(id, e)
+	var duplicate *store.Duplicate
+	switch {
+	case errors.As(err, &duplicate):
+		if c.flags.has("json") {
+			_ = c.json(map[string]any{"error": "duplicate", "message": duplicate.Error()})
+			return ErrReported
+		}
+		fmt.Fprintln(c.env.Stdout, "Not stored: "+duplicate.Error()+".")
+		return ErrReported
+	case errors.Is(err, store.ErrRefused), errors.Is(err, store.ErrInvalid), errors.Is(err, store.ErrNotFound):
+		code := "invalid"
+		if errors.Is(err, store.ErrRefused) {
+			code = "refused"
+		}
+		if c.flags.has("json") {
+			_ = c.json(map[string]any{"error": code, "message": err.Error()})
+			return ErrReported
+		}
+		fmt.Fprintln(c.env.Stdout, "Not stored: "+err.Error())
+		return ErrReported
+	case err != nil:
+		return err
+	}
+	if c.flags.has("json") {
+		return c.json(map[string]any{"memory": detailed(store.Hit{Record: m, Decay: 1})})
+	}
+	fmt.Fprintf(c.env.Stdout, "Updated %s.\n", store.FormatID(m.ID))
+	c.printAll([]store.Hit{{Record: m, Decay: 1}}, c.project())
 	return nil
 }
 
@@ -445,6 +578,62 @@ func parseID(text string) (int64, error) {
 	return id, nil
 }
 
+// foldKeywordSpill keeps stray words after --keywords out of the memory's text.
+// A shell splits `--keywords 别名 word 视图` on the space, and every word after
+// the flag's one value lands among the positional arguments, where it would be
+// appended to the text. When the text (or, for edit, the id) is already given,
+// the words that follow --keywords are taken as more keywords; when it is not,
+// the first one may be the text itself, and the arguments are left alone.
+func foldKeywordSpill(args []string) []string {
+	var out []string
+	given := false // a positional argument before the flag: text, or the id
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--keywords" || arg == "--keyword" {
+			value := ""
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") {
+				value = args[i+1]
+				i++
+			}
+			words := []string{}
+			if given {
+				for i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") {
+					words = append(words, args[i+1])
+					i++
+				}
+			}
+			out = append(out, arg)
+			all := words
+			if value != "" {
+				all = append([]string{value}, words...)
+			}
+			if len(all) > 0 {
+				out = append(out, strings.Join(all, ","))
+			}
+			continue
+		}
+		if !strings.HasPrefix(arg, "--") {
+			given = true
+		}
+		out = append(out, arg)
+	}
+	return out
+}
+
+// kind reads --kind where a typo would otherwise look like an empty answer:
+// a list of no memories of kind "prefer" is an answer, and a wrong one. It is
+// a misuse, answered with the kinds there are.
+func (c command) kind() (string, error) {
+	k := strings.ToLower(strings.TrimSpace(c.flags.one("kind")))
+	if k == "" {
+		return "", nil
+	}
+	if !slices.Contains(store.Kinds, k) {
+		return "", usageErr("--kind must be one of %s", strings.Join(store.Kinds, ", "))
+	}
+	return k, nil
+}
+
 func (c command) ids(missing string) ([]int64, error) {
 	if len(c.args) == 0 {
 		return nil, usageErr("%s", missing)
@@ -471,13 +660,18 @@ func (c command) json(v any) error {
 
 // memoryView is a memory as `--json` shows it.
 type memoryView struct {
-	ID           int64   `json:"id"`
-	Kind         string  `json:"kind"`
-	Content      string  `json:"content"`
-	Written      string  `json:"written"`
-	Confidence   string  `json:"confidence"`
-	Verified     int     `json:"verified,omitempty"`
-	Contradicted int     `json:"contradicted,omitempty"`
+	ID         int64    `json:"id"`
+	Kind       string   `json:"kind"`
+	Content    string   `json:"content"`
+	Keywords   []string `json:"keywords"`
+	Written    string   `json:"written"`
+	Confidence string   `json:"confidence"`
+	// Counts are always present: a zero is a fact an agent reads, and a key
+	// left out looks like a field the store does not have.
+	Uses         int     `json:"uses"`
+	Verified     int     `json:"verified"`
+	Contradicted int     `json:"contradicted"`
+	LastUsed     string  `json:"lastUsed,omitempty"`
 	Project      string  `json:"project,omitempty"`
 	SupersededBy int64   `json:"supersededBy,omitempty"`
 	Archived     bool    `json:"archived,omitempty"`
@@ -486,8 +680,9 @@ type memoryView struct {
 
 func view(h store.Hit) memoryView {
 	v := memoryView{
-		ID: h.ID, Kind: h.Kind, Content: h.Content, Written: day(h.CreatedAt),
+		ID: h.ID, Kind: h.Kind, Content: h.Content, Keywords: orEmptyStrings(h.Keywords), Written: day(h.CreatedAt),
 		Confidence: h.Confidence, Verified: h.Verified, Contradicted: h.Contradicted,
+		Uses: h.Uses, LastUsed: lastUsed(h.LastUsed),
 		Archived: h.State == store.StateArchived, Decay: h.Decay,
 	}
 	if h.Project != nil {
@@ -497,6 +692,39 @@ func view(h store.Hit) memoryView {
 		v.SupersededBy = *h.SupersededBy
 	}
 	return v
+}
+
+// detailedView is a memory as show and list --json give it: everything a
+// search result carries, and that it is the current one or what replaced it.
+type detailedView struct {
+	memoryView
+	Current     bool `json:"current"`
+	Superseding bool `json:"superseding"`
+}
+
+func detailed(h store.Hit) detailedView {
+	return detailedView{
+		memoryView:  view(h),
+		Current:     h.State == store.StateActive && h.SupersededBy == nil,
+		Superseding: h.SupersededBy != nil,
+	}
+}
+
+// orEmptyStrings is keywords as JSON lists them: [] rather than null.
+func orEmptyStrings(words []string) []string {
+	if words == nil {
+		return []string{}
+	}
+	return words
+}
+
+// lastUsed is when a memory was last returned, used or verified; empty when
+// it never was.
+func lastUsed(unix *uint64) string {
+	if unix == nil {
+		return ""
+	}
+	return day(*unix)
 }
 
 func views(hits []store.Hit) []memoryView {
