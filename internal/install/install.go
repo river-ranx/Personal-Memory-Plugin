@@ -130,9 +130,8 @@ func binary() (string, error) {
 //
 // Claude Code and Codex: settings `hooks` → event → [{matcher, hooks: [...]}];
 // Antigravity: hooks.json → hook name → event → handlers. Either way memory
-// hooks exactly the events it answers, [hooks.Events]: a session starting
-// (which comes again after a clear, a compaction or a resume) and a turn
-// ending.
+// hooks exactly the events it answers for that agent, [hooks.Events]; an
+// install replaces every entry of memory's, whatever its event.
 const timeout = 10
 
 // ours is a hook command memory installed.
@@ -184,7 +183,7 @@ func setNestedHooks(path, agent, bin string) error {
 		}
 	}
 	if bin != "" {
-		for _, event := range hooks.Events {
+		for _, event := range hooks.Events[agent] {
 			group := map[string]any{"hooks": []any{map[string]any{
 				"type": "command", "command": command(bin, agent, event), "timeout": timeout,
 			}}}
@@ -210,7 +209,7 @@ func setNamedHook(path, bin string) error {
 	delete(root, SkillName)
 	if bin != "" {
 		entry := map[string]any{}
-		for _, event := range hooks.Events {
+		for _, event := range hooks.Events["antigravity"] {
 			handler := map[string]any{"type": "command", "command": command(bin, "antigravity", event), "timeout": timeout}
 			entry[event] = []any{handler}
 		}

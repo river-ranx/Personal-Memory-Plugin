@@ -6,7 +6,7 @@
 
 ```
 Hook ──┬─ 会话开始：告诉 Agent 它有记忆、什么时候查、什么值得记
-       └─ 每轮结束：提醒它回顾——有没有要记的、有没有要确认的
+       └─ 每一轮：提醒它回顾——有没有要记的、有没有要确认的
 
 Agent ── memory search / add / confirm ──▶ ~/.memory/memory.db
 ```
@@ -96,32 +96,35 @@ memory --help | memory <命令> --help
 
 ## Hook
 
-**会话开始**注入一段固定的提示词（`hooks.Note`），什么值得记、什么不记都写在这里。**每轮结束**拦住 Agent 一次，
-给它一段提醒（`hooks.TurnEnd`）：这一轮有没有值得记的、有没有靠记忆做了事要 `confirm` 的；都没有就直接结束，
-不输出文字。提醒不重复判断标准，只指回开头那段——它每轮都要进上下文，越短越好。
+**会话开始**注入一段固定的提示词（`hooks.Note`），什么值得记、什么不记都写在这里。之后**每一轮都会被回顾一次**：
+这一轮有没有值得记的、有没有靠记忆做了事要 `confirm` 的。回顾不重复判断标准，只指回开头那段。
 
-每轮结束的提醒在这些情况下不发，直接放行：
+| | 什么时候回顾 | 没东西可记时 |
+|---|---|---|
+| Claude Code、Codex | 用户发下一条消息时，提醒（`hooks.LastTurn`）随消息一起进上下文，Agent 先回顾上一轮再回应 | 一个字不提，直接回应用户；不多跑一轮 |
+| Antigravity | 一轮结束时拦住 Agent 一次，给它提醒（`hooks.TurnEnd`） | 直接结束，不输出文字 |
 
-- 启动 Agent 时设了 `MEMORY_TURN_END=off`。用 `claude -p` 跑脚本、CI 时设上：实测 `claude -p` 也会触发每轮结束，
-  而钩子收到的数据和环境变量分辨不出「脚本」和「有人在用的 SDK 应用」，所以只能由调用方说明；
-- 这次停止就是提醒引出的那一次（否则会无限循环）；
+Claude Code 和 Codex 不在一轮结束时拦：被拦下的那一轮如果空着结束，Claude Code 会追加一句「请给出用户可见的回复」
+再跑一轮（实测，程序里有这段原文），所以「没东西可记就不出声」只能靠把回顾挪到下一条消息里做到。
+代价是会话的最后一轮不会被回顾——会话开始的提示词本来就要求边做边记。
+
+回顾在这些情况下不发：
+
+- 启动 Agent 时设了 `MEMORY_REVIEW=off`。用 `claude -p` 跑脚本、CI 时设上：钩子收到的数据和环境变量分辨不出
+  「脚本」和「有人在用的 SDK 应用」，只能由调用方说明；
 - 计划模式，Agent 跑不了命令；
-- Antigravity 不是正常结束（出错、用户取消、到了调用上限）；
-- Codex 自己的记忆整理（工作目录在 `$CODEX_HOME/memories` 下）——Codex 被拦就放弃整理。依据：Codex 程序里
-  整理代理先准备一个「记忆工作区」，本机 `~/.codex/memories` 里正有整理阶段留下的文件；整理在本机没成功跑过，
-  未在运行时实测；
-- 收到的数据读不懂：宁可漏一次，也不冒循环的险。
+- Codex 子代理的任务（带 `agent_id`），那不是用户的消息；
+- Antigravity：这次停止就是提醒引出的那一次（否则会无限循环）、不是正常结束（出错、用户取消、到了调用上限），
+  或收到的数据读不懂（宁可漏一次，也不冒循环的险）。
 
-Hook 不碰数据库、不留状态，任何情况都以 0 退出，不让 Agent 失败。代价是每轮多一次模型往返，
-没东西可记时通常只多几秒。
+Hook 不碰数据库、不留状态，任何情况都以 0 退出，不让 Agent 失败。
 
 |  | Claude Code | Codex | Antigravity |
 | --- | --- | --- | --- |
 | 会话开始何时触发 | 启动、恢复、`/clear`、压缩后 | 同左，另有 fork | 只在新对话开始时一次 |
 | 会话开始的输出 | `hookSpecificOutput.additionalContext` | 同左 | `{"injectSteps":[{"systemMessage":{"systemMessage":"…"}}]}` |
-| 每轮结束防循环字段 | `stop_hook_active` | `stop_hook_active` | `continuationActive` |
-| 拦住并提醒 | `{"decision":"block","reason":"…"}` | 同左 | `{"decision":"continue","reason":"…"}` |
-| 放行 | 不输出 | 不输出 | `{"decision":"stop"}` |
+| 回顾挂在 | `UserPromptSubmit` | `UserPromptSubmit` | `Stop` |
+| 回顾的输出 | `hookSpecificOutput.additionalContext` | 同左 | `{"decision":"continue","reason":"…"}`；不提醒时 `{"decision":"stop"}` |
 | 信任 | 不需要 | 新 Hook 要先在 `/hooks` 里信任 | 不需要 |
 
 格式核对自 Codex 0.170 程序内嵌的 Hook JSON Schema 和 Antigravity（`agy` 1.5.12）内嵌的 Hook 文档。

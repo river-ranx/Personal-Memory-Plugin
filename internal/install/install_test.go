@@ -12,7 +12,9 @@ func TestNestedHooksKeepOthersAndReplaceOnlyOurs(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	// memory's entry from a binary at another path is replaced; the person's
 	// own hooks stay.
-	other := `{"model":"opus","hooks":{"Stop":[{"hooks":[{"type":"command","command":"say done"}]}],
+	// An install replaces every entry of memory's, whatever its event — here a
+	// Stop entry memory no longer hooks for Claude Code.
+	other := `{"model":"opus","hooks":{"Stop":[{"hooks":[{"type":"command","command":"say done"},{"type":"command","command":"'/old/memory' hook claude Stop"}]}],
 	  "SessionStart":[{"hooks":[{"type":"command","command":"'/old/memory' hook claude SessionStart"}]}]}}`
 	if err := os.WriteFile(path, []byte(other), 0o600); err != nil {
 		t.Fatal(err)
@@ -27,13 +29,15 @@ func TestNestedHooksKeepOthersAndReplaceOnlyOurs(t *testing.T) {
 		t.Fatal("an unrelated setting was lost")
 	}
 	hooks := root["hooks"].(map[string]any)
-	// memory's two events; Stop also keeps the person's own hook, beside ours.
-	if len(hooks) != 2 || hooks["SessionStart"] == nil || hooks["Stop"] == nil {
+	// memory's two events, and the person's own Stop hook, untouched.
+	if len(hooks) != 3 || hooks["SessionStart"] == nil || hooks["UserPromptSubmit"] == nil || hooks["Stop"] == nil {
 		t.Fatalf("events %v", keys(hooks))
 	}
-	stop := dump(hooks["Stop"])
-	if len(hooks["Stop"].([]any)) != 2 || !strings.Contains(stop, "say done") || strings.Count(stop, "'/new/memory' hook claude Stop") != 1 {
+	if stop := dump(hooks["Stop"]); len(hooks["Stop"].([]any)) != 1 || !strings.Contains(stop, "say done") || strings.Contains(stop, "memory") {
 		t.Fatalf("Stop: %s", stop)
+	}
+	if prompt := dump(hooks["UserPromptSubmit"]); strings.Count(prompt, "'/new/memory' hook claude UserPromptSubmit") != 1 {
+		t.Fatalf("UserPromptSubmit: %s", prompt)
 	}
 	start := dump(hooks["SessionStart"])
 	if strings.Contains(start, "/old/") || strings.Count(start, "/new/memory") != 1 {

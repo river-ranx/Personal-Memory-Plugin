@@ -1,16 +1,22 @@
-// Package hooks is when an agent is pointed at its memory. There are two
-// moments: a session starting, when the hook tells the agent it has a memory,
-// when to look in it and what is worth writing down; and a turn ending, when it
-// asks the agent to look back over the turn — anything worth writing, any
-// memory it relied on to report — before it stops.
+// Package hooks is when an agent is pointed at its memory. A session start
+// tells the agent it has a memory, when to look in it and what is worth
+// writing down. Then each turn is looked back over — anything worth writing,
+// any memory relied on to report — and how depends on the agent:
+//
+//   - Claude Code and Codex: when the person sends the next message, the
+//     review rides along with it as context. The agent answers the message
+//     as usual and says nothing about memory unless it did something. Holding
+//     the agent at the end of a turn would not do: Claude Code insists on a
+//     visible reply to a turn of its own, so "nothing to record" could not be
+//     silent there.
+//   - Antigravity: when the turn ends, the agent is kept from stopping once.
 //
 // The hook decides nothing. Whether a message is worth remembering, whether
 // something may have come up before, what to write: that is the agent's
 // judgment, made from the prompt (and the memory skill it points to), not a
 // pattern matched on what the person typed. The hook reads of its payload only
-// what keeps the turn-end reminder from going wrong — whether this stop is
-// already the one the reminder asked for, whether the agent can act at all —
-// keeps no state and never opens the database.
+// what keeps the review from going wrong, keeps no state and never opens the
+// database.
 //
 // How often a session start comes is the agent's: Claude Code and Codex run it
 // again after the context is cleared, compacted or resumed — when the prompt
@@ -19,8 +25,8 @@
 package hooks
 
 // worth and notWorth are what is and is not worth writing down, said once,
-// in [Note]; the turn-end reminder points back to it rather than repeating it,
-// since the session's prompt is in the context whenever a turn ends. Not only for code: the agent
+// in [Note]; the review of each turn points back to it rather than repeating
+// it, since the session's prompt is in the context whenever a review comes. Not only for code: the agent
 // may be doing research, writing, analysis or management, so they name kinds
 // of knowledge, not artefacts of one trade. Nothing but these words keeps a
 // record of what happened out of the memory — the store refuses only text too
@@ -40,12 +46,24 @@ const Note = `[Memory] 你有一份本机长期记忆，用 ` + "`memory`" + ` �
 - 用：记忆只是过去留下的线索，不是事实——可能记错、过时，或不适用于眼前这件事。先看头部的年龄和标记，依赖它之前先核实；它与用户当下的话、或你手头的材料冲突时，以后者为准，并更新那条记忆（用 ` + "`memory --help`" + ` 看怎么改）。
 - 不记：` + notWorth + `。`
 
-// TurnEnd is what a turn ends with: the agent is kept from stopping once and
-// given this. Most turns leave nothing to do, so the way out — say nothing,
-// stop — is spelled out, and the reminder must not send the agent searching
-// for something to confirm. It may arrive as if typed by the person (Codex
-// continues the turn with it as the prompt), so it says it is not.
-const TurnEnd = `[Memory] 这一轮要结束了（这是 memory 的自动提醒，不是用户的新消息）。回顾这一轮，问自己两件事：
-- 有没有换一个新会话还用得上的东西？按开头 [Memory] 说的标准：记学到了什么，不记发生了什么。有就 ` + "`memory add \"…\"`" + `，一条一句；用户要你记住的，一定记。
-- 这一轮靠 ` + "`memory search`" + ` 查到的记忆作答或做事了吗？没发现问题就 ` + "`memory confirm <id>`" + `，对照原始来源核实过就加 ` + "`--outcome verified`" + `；发现它错了：知道现在是什么样就 ` + "`memory add \"…\" --supersedes <id>`" + `，只知道它不对就 ` + "`memory confirm <id> --outcome contradicted --note \"…\"`" + `。没用到就跳过，不要为此再去查。
-两件都没有就直接结束，不要输出任何文字；做了就用一句话告诉用户记了或改了什么。`
+// questions are what a turn is looked back over with, turn naming it ("上一轮"
+// or "这一轮"). What is worth keeping is not repeated: the session's prompt
+// says it, and is in the context whenever this comes. It must not send the
+// agent searching for something to confirm.
+func questions(turn string) string {
+	return `- ` + turn + `有没有换一个新会话还用得上的东西？按开头 [Memory] 说的标准：记学到了什么，不记发生了什么。有就 ` + "`memory add \"…\"`" + `，一条一句；用户要你记住的，一定记。
+- ` + turn + `靠 ` + "`memory search`" + ` 查到的记忆作答或做事了吗？没发现问题就 ` + "`memory confirm <id>`" + `，对照原始来源核实过就加 ` + "`--outcome verified`" + `；发现它错了：知道现在是什么样就 ` + "`memory add \"…\" --supersedes <id>`" + `，只知道它不对就 ` + "`memory confirm <id> --outcome contradicted --note \"…\"`" + `。没用到就跳过，不要为此再去查。`
+}
+
+// LastTurn comes with the person's next message (Claude Code, Codex): look
+// back over the turn before it, then answer the message. Most turns leave
+// nothing to do, so the way through — say nothing of it — is spelled out: a
+// review with nothing to report must not show in the reply.
+var LastTurn = "[Memory] 先回顾上一轮（这是 memory 的自动提醒，不是用户说的话；会话刚开始就跳过）：\n" + questions("上一轮") +
+	"\n都没有就一个字也别提，直接回应用户这条消息；做了就在回复里用一句话说明记了或改了什么。"
+
+// TurnEnd is what a turn ends with (Antigravity): the agent is kept from
+// stopping once and given this. The way out — say nothing, stop — is spelled
+// out. It may read as if typed by the person, so it says it is not.
+var TurnEnd = "[Memory] 这一轮要结束了（这是 memory 的自动提醒，不是用户的新消息）。回顾这一轮，问自己两件事：\n" + questions("这一轮") +
+	"\n两件都没有就直接结束，不要输出任何文字；做了就用一句话告诉用户记了或改了什么。"

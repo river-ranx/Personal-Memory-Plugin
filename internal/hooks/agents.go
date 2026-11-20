@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 )
@@ -13,21 +11,27 @@ import (
 // Agents is every agent the hook speaks to.
 var Agents = []string{"claude", "codex", "antigravity"}
 
-// The two moments the hook answers. All three agents name them the same.
+// The moments the hook answers, by each agent's name for them.
 const (
-	startEvent = "SessionStart"
-	endEvent   = "Stop"
+	sessionStartEvent = "SessionStart"
+	promptEvent       = "UserPromptSubmit"
+	stopEvent         = "Stop"
 )
 
-// Events is every event the hook answers, in the order it is installed.
-var Events = []string{startEvent, endEvent}
+// Events is, for each agent, the events the hook answers, in the order they
+// are installed: the session's start, then the moment a turn is looked back
+// over (see the package comment for why it differs).
+var Events = map[string][]string{
+	"claude":      {sessionStartEvent, promptEvent},
+	"codex":       {sessionStartEvent, promptEvent},
+	"antigravity": {sessionStartEvent, stopEvent},
+}
 
-// stop is what of a Stop payload the hook reads: Claude Code and Codex write
-// snake_case, Antigravity camelCase.
-type stop struct {
-	StopHookActive     bool   `json:"stop_hook_active"`
+// payload is what of a hook's input the hook reads. Claude Code and Codex
+// write snake_case, Antigravity camelCase.
+type payload struct {
 	PermissionMode     string `json:"permission_mode"`
-	Cwd                string `json:"cwd"`
+	AgentID            string `json:"agent_id"`
 	ContinuationActive bool   `json:"continuationActive"`
 	TerminationReason  string `json:"terminationReason"`
 }
@@ -36,16 +40,19 @@ type stop struct {
 // out. It never fails the agent — memory is a help, not a gate — so an event
 // that is not understood is reported on errw and answered with nothing.
 func Run(agent, event string, in io.Reader, out, errw io.Writer, getenv func(string) string) {
-	payload, _ := io.ReadAll(in)
-	known := slices.Contains(Agents, agent)
+	raw, _ := io.ReadAll(in)
+	var p payload
+	readable := json.Unmarshal(raw, &p) == nil
 	var answer any
 	switch {
-	case known && event == startEvent:
+	case !slices.Contains(Events[agent], event):
+		fmt.Fprintf(errw, "memory hook %s %s: not an event memory answers (agents and events: %v)\n", agent, event, Events)
+	case event == sessionStartEvent:
 		answer = sessionStart(agent)
-	case known && event == endEvent:
-		answer = turnEnd(agent, payload, getenv)
-	default:
-		fmt.Fprintf(errw, "memory hook %s %s: not an event memory answers (agents: %v, events: %v)\n", agent, event, Agents, Events)
+	case event == promptEvent:
+		answer = lastTurn(p, getenv)
+	case event == stopEvent:
+		answer = turnEnd(p, readable, getenv)
 	}
 	if answer != nil {
 		b, _ := json.Marshal(answer)
@@ -61,60 +68,46 @@ func sessionStart(agent string) any {
 		// (Antigravity's hooks documentation says so in as many words).
 		return map[string]any{"injectSteps": []map[string]any{{"systemMessage": map[string]string{"systemMessage": Note}}}}
 	}
-	return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": startEvent, "additionalContext": Note}}
+	return context(sessionStartEvent, Note)
 }
 
-// turnEnd keeps the agent from stopping once, with [TurnEnd] — unless it was
-// switched off ([switchedOff]), or reminding would go wrong: the stop is the
-// one a reminder already asked for (asking again would never end), the agent
-// may not run commands, or there is nothing to look back on. A payload it
-// cannot read gets no reminder, for the same reason: a loop is worse than a
-// missed one.
-func turnEnd(agent string, payload []byte, getenv func(string) string) any {
-	var p stop
-	remind := json.Unmarshal(payload, &p) == nil && !switchedOff(getenv)
-	if agent == "antigravity" {
-		// Only a turn that ended normally; continuationActive is Antigravity's
-		// stop_hook_active. Any decision but "continue" lets it stop.
-		if !remind || p.ContinuationActive || p.TerminationReason != "NO_TOOL_CALL" {
-			return map[string]any{"decision": "stop"}
-		}
-		return map[string]any{"decision": "continue", "reason": TurnEnd}
-	}
-	if !remind || p.StopHookActive || p.PermissionMode == "plan" ||
-		agent == "codex" && consolidating(p.Cwd, getenv) {
+// lastTurn adds [LastTurn] to the person's message (Claude Code, Codex) —
+// unless the review was switched off, the agent may not run commands (plan
+// mode), or the message is not a person's but a subagent's task (Codex sends
+// those with an agent_id). It holds nothing up, so a payload it cannot read
+// is no risk: the review comes all the same.
+func lastTurn(p payload, getenv func(string) string) any {
+	if switchedOff(getenv) || p.PermissionMode == "plan" || p.AgentID != "" {
 		return nil
 	}
-	return map[string]any{"decision": "block", "reason": TurnEnd}
+	return context(promptEvent, LastTurn)
 }
 
-// switchedOff is whether whoever started the agent asked for no turn-end
-// reminder: MEMORY_TURN_END=off (or 0, false). A script running `claude -p`
-// sets it, since nothing in the payload tells a script from a person — an
-// app driving the agent through its SDK looks the same as a script does.
+// turnEnd keeps Antigravity from stopping once, with [TurnEnd] — unless it was
+// switched off, the turn did not end normally, or this stop is the one a
+// reminder already asked for (continuationActive): asking again would never
+// end. A payload it cannot read gets no reminder for that reason: a loop is
+// worse than a missed one. Any decision but "continue" lets it stop.
+func turnEnd(p payload, readable bool, getenv func(string) string) any {
+	if !readable || switchedOff(getenv) || p.ContinuationActive || p.TerminationReason != "NO_TOOL_CALL" {
+		return map[string]any{"decision": "stop"}
+	}
+	return map[string]any{"decision": "continue", "reason": TurnEnd}
+}
+
+// context is a Claude Code / Codex answer that adds text to the context.
+func context(event, text string) any {
+	return map[string]any{"hookSpecificOutput": map[string]any{"hookEventName": event, "additionalContext": text}}
+}
+
+// switchedOff is whether whoever started the agent asked for no review of
+// each turn: MEMORY_REVIEW=off (or 0, false, no). A script running `claude -p`
+// sets it, since nothing in the payload tells a script from a person — an app
+// driving the agent through its SDK looks the same as a script does.
 func switchedOff(getenv func(string) string) bool {
-	switch strings.ToLower(strings.TrimSpace(getenv("MEMORY_TURN_END"))) {
+	switch strings.ToLower(strings.TrimSpace(getenv("MEMORY_REVIEW"))) {
 	case "off", "0", "false", "no":
 		return true
 	}
 	return false
-}
-
-// consolidating is whether a Codex turn is Codex's own memory consolidation,
-// an agent it runs in its memories directory: Codex runs Stop hooks for it too,
-// and gives up consolidating when one blocks.
-func consolidating(cwd string, getenv func(string) string) bool {
-	if cwd == "" {
-		return false
-	}
-	home := getenv("CODEX_HOME")
-	if home == "" {
-		dir, err := os.UserHomeDir()
-		if err != nil {
-			return false
-		}
-		home = filepath.Join(dir, ".codex")
-	}
-	memories := filepath.Join(home, "memories")
-	return cwd == memories || strings.HasPrefix(cwd, memories+string(filepath.Separator))
 }

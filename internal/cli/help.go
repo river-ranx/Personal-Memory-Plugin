@@ -362,9 +362,10 @@ var otherHelp = map[string]string{
 USAGE
   memory install <agent...>        agents: claude, codex, antigravity
 
-Puts the memory skill and two hooks (on session start, which gives the agent the
-prompt about its memory; on each turn's end, which reminds it to write down and
-confirm) where each agent reads them. It only touches its own
+Puts the memory skill and two hooks where each agent reads them: one on session
+start, which gives the agent the prompt about its memory; one that has it look
+back over each turn, to write down and confirm (with the next message for
+Claude Code and Codex, at the turn's end for Antigravity). It only touches its own
 entries and keeps a copy of a config file it changes as <file>.memory-backup.
 Codex asks you to trust new hooks: run /hooks in Codex once. A person runs this,
 once; an agent has no need to.`,
@@ -380,9 +381,11 @@ USAGE
   memory hook <agent> <event>
 
 Called by an agent, not run by hand. On SessionStart it prints the prompt that
-tells the agent about its memory; on Stop it holds the agent back once with a
-reminder to write down what is worth keeping and to confirm the memories it
-relied on. Both in the agent's own format. It keeps nothing and opens no
+tells the agent about its memory. On UserPromptSubmit (Claude Code, Codex) it
+adds a review of the last turn to the message; on Stop (Antigravity) it holds
+the agent back once with a review of the turn: write down what is worth
+keeping, confirm the memories relied on. Both in the agent's own format.
+MEMORY_REVIEW=off turns the review off. It keeps nothing and opens no
 database; any other event gets no answer.`,
 }
 

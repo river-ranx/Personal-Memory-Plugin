@@ -412,7 +412,7 @@ func TestTheHookAnswersASessionStartAndOpensNoDatabase(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "additionalContext") || !strings.Contains(out, "memory search") {
 		t.Fatalf("%d %q", code, out)
 	}
-	if code, out := r.memory("{}", "hook", "claude", "UserPromptSubmit"); code != 0 || strings.Contains(out, "additionalContext") {
+	if code, out := r.memory("{}", "hook", "claude", "PostToolUse"); code != 0 || strings.Contains(out, "additionalContext") {
 		t.Fatalf("a message: %d %q", code, out)
 	}
 	if _, err := os.Stat(r.home + "/memory.db"); err == nil {
