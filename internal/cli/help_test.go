@@ -15,7 +15,7 @@ import (
 // text, which is its own; and asking opens nothing and runs nothing.
 func TestEveryCommandHasItsOwnHelp(t *testing.T) {
 	r := newRun(t)
-	for _, name := range append(slices.Clone(commandOrder), "install", "uninstall", "hook") {
+	for _, name := range append(slices.Clone(commandOrder), "install", "uninstall", "hook", "update") {
 		var texts []string
 		for _, args := range [][]string{{name, "--help"}, {name, "-h"}, {"help", name}} {
 			code, out := r.memory("", args...)

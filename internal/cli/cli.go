@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"memory/internal/hooks"
 	"memory/internal/install"
 	"memory/internal/store"
+	"memory/internal/update"
 )
 
 // Env is what the command reads from its surroundings; a seam for tests.
@@ -31,8 +34,14 @@ type Env struct {
 // ErrReported is an error whose explanation is already on stdout.
 var ErrReported = errors.New("reported")
 
-// Main runs one command and returns the process's exit code.
+// Main runs one command and returns the process's exit code. Any command but
+// those that set memory up starts the daily background update check, if due.
 func Main(args []string, env Env) int {
+	if len(args) > 0 && !slices.Contains([]string{"update", "install", "uninstall"}, args[0]) {
+		if path, err := DBPath(env.Getenv); err == nil {
+			update.Due(filepath.Dir(path), env.Getenv)
+		}
+	}
 	if err := dispatch(args, env); err != nil {
 		if !errors.Is(err, ErrReported) {
 			fmt.Fprintln(env.Stderr, "memory:", err)
@@ -84,6 +93,11 @@ func dispatch(args []string, env Env) error {
 		return store.Open(path)
 	}
 	switch args[0] {
+	case "version", "--version":
+		fmt.Fprintln(env.Stdout, "memory "+update.Version)
+		return nil
+	case "update":
+		return selfUpdate(args[1:], env)
 	case "hook":
 		if len(args) != 3 {
 			return errors.New("usage: memory hook <agent> <event> (the agents' hook configs call this)")
@@ -136,6 +150,36 @@ func dispatch(args []string, env Env) error {
 		return fmt.Errorf("%s\nusage: %s\n%s", misuse.msg, cmd.usage(args[0]), moreAbout(args[0]))
 	}
 	return err
+}
+
+// selfUpdate is `memory update`: upgrade to the latest release now, then set
+// up again, with the new binary, every agent memory is installed for. With
+// --background (how the daily check runs it) it says nothing.
+func selfUpdate(args []string, env Env) error {
+	out := env.Stdout
+	if slices.Contains(args, "--background") {
+		out = io.Discard
+	}
+	path, err := DBPath(env.Getenv)
+	if err != nil {
+		return err
+	}
+	exe, err := os.Executable()
+	if err == nil {
+		exe, err = filepath.EvalSymlinks(exe)
+	}
+	if err != nil {
+		return err
+	}
+	return update.Run(filepath.Dir(path), exe, out, func(newExe string) error {
+		agents := install.Installed(env.Getenv)
+		if len(agents) == 0 {
+			return nil
+		}
+		cmd := exec.Command(newExe, append([]string{"install"}, agents...)...)
+		cmd.Stdout, cmd.Stderr = out, out
+		return cmd.Run()
+	})
 }
 
 // usageError is a command used wrongly; the answer to it carries the

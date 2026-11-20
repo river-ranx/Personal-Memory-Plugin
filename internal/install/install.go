@@ -54,6 +54,20 @@ func Install(agent string, getenv func(string) string) ([]string, error) {
 	return changed, nil
 }
 
+// Installed is every agent memory's skill is installed for: what an update
+// sets up again.
+func Installed(getenv func(string) string) []string {
+	var agents []string
+	for _, agent := range hooks.Agents {
+		if t, err := targetOf(agent, getenv); err == nil {
+			if _, err := os.Stat(filepath.Join(t.skills, SkillName, "SKILL.md")); err == nil {
+				agents = append(agents, agent)
+			}
+		}
+	}
+	return agents
+}
+
 // Uninstall removes what [Install] put in place.
 func Uninstall(agent string, getenv func(string) string) ([]string, error) {
 	t, err := targetOf(agent, getenv)

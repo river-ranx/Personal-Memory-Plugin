@@ -26,6 +26,11 @@ curl -fsSL https://raw.githubusercontent.com/river-ranx/Personal-Memory-Plugin/m
 可选的环境变量：`MEMORY_AGENTS="claude codex"` 只装这几家，`MEMORY_VERSION=v0.1.0` 装指定版本，
 `MEMORY_BIN_DIR` 改放命令的目录。再跑一次就是升级，记忆不受影响。Codex 装完要在 Codex 里跑一次 `/hooks` 信任新 Hook。
 
+**自动升级**：任何 `memory` 命令运行时（包括 Hook），每天最多一次，在后台另起一个进程检查最新发布；有新版就下载、
+校验 SHA256、替换程序，再用新程序给已装的 Agent 重装 skill 和 Hook。命令本身不等它。上次检查的结果在
+`~/.memory/update-check`。`MEMORY_AUTO_UPDATE=off` 关掉自动检查；`memory update` 立即手动升级；`memory version`
+看当前版本。从源码编译的版本（`dev`）不会自动升级。
+
 卸载：`memory uninstall claude codex antigravity && rm ~/.local/bin/memory`（记忆库不删，要删就删 `~/.memory`）。
 
 | Agent | Skill | Hook 配置 |
@@ -135,8 +140,9 @@ Hook 不碰数据库、不留状态，任何情况都以 0 退出，不让 Agent
 make build                      # 编到 bin/memory
 make test                       # go vet + go test
 make install                    # 从源码装：编到 ~/.local/bin/memory，给三家装好 skill 和 Hook
-make dist                       # 交叉编译 dist/memory-<系统>-<架构> 和 SHA256SUMS
+make dist VERSION=v0.3.0        # 交叉编译 dist/memory-<系统>-<架构> 和 SHA256SUMS，版本号编进程序
 ```
 
-发布：`make dist`，再把 `dist/` 里的文件传到一个 GitHub Release，`install.sh` 默认装最新的那个。
+发布：`make dist VERSION=<新标签>`，再把 `dist/` 里的文件传到同名标签的 GitHub Release 并设为 Latest。
+`install.sh` 装最新的那个；已装的机器在一天内自己升级上来。
 

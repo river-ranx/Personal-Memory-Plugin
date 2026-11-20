@@ -375,6 +375,21 @@ USAGE
   memory uninstall <agent...>      agents: claude, codex, antigravity
 
 Takes out what memory install put in place, and nothing else. A person runs this.`,
+	"update": `memory update — upgrade to the latest release now
+
+USAGE
+  memory update
+
+Asks GitHub for the latest release; if it is newer than this one, downloads it,
+checks it against the release's SHA256SUMS, puts it in place of this binary and
+has it set up again every agent memory is installed for, so the skill and the
+hooks change with it. Memories are not touched.
+
+Memory does this by itself: when any memory command runs, at most once a day, it
+starts the same check in the background and does not wait for it. What came of
+the last check is in update-check beside the database. MEMORY_AUTO_UPDATE=off
+turns the background check off. A build from source (memory version says dev)
+never updates itself. A person runs this; an agent has no need to.`,
 	"hook": `memory hook — what an agent's hook configuration calls
 
 USAGE
@@ -404,6 +419,7 @@ COMMANDS
 		fmt.Fprintf(&b, "  %-8s %s\n           %s\n", name, commands[name].summary, commands[name].usage(name))
 	}
 	b.WriteString(`  install, uninstall, hook   set up or remove the skill and hooks (for a person, not an agent)
+  update, version            upgrade to the latest release now; print this build's version
 
 Everything about one command — flags, what it prints, what its answers mean,
 examples:   memory <command> --help      (or: memory help <command>)
@@ -479,7 +495,7 @@ func helpFor(topic []string) (string, error) {
 	if text, ok := otherHelp[topic[0]]; ok {
 		return text + "\n", nil
 	}
-	return "", fmt.Errorf("no help for %q. Commands: %s, install, uninstall, hook", topic[0], strings.Join(commandOrder, ", "))
+	return "", fmt.Errorf("no help for %q. Commands: %s, install, uninstall, hook, update", topic[0], strings.Join(commandOrder, ", "))
 }
 
 // wantsHelp is whether the arguments ask for help.
