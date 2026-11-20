@@ -236,10 +236,10 @@ func TestTheReviewsAskAndLetGo(t *testing.T) {
 			t.Fatalf("%s is %d characters: it comes with every turn", name, n)
 		}
 	}
-	if !strings.Contains(LastTurn, "上一轮") || !strings.Contains(LastTurn, "一个字也别提，直接回应用户这条消息") || !strings.Contains(LastTurn, "会话刚开始就跳过") {
+	if !strings.Contains(LastTurn, "上一轮") || !strings.Contains(LastTurn, "悄悄做，回复里一个字也别提，直接回应用户这条消息") || !strings.Contains(LastTurn, "会话刚开始就跳过") {
 		t.Fatalf("LastTurn does not say to answer the message and keep quiet about an empty review:\n%s", LastTurn)
 	}
-	if !strings.Contains(TurnEnd, "这一轮") || !strings.Contains(TurnEnd, "直接结束，不要输出任何文字") {
+	if !strings.Contains(TurnEnd, "这一轮") || !strings.Contains(TurnEnd, "悄悄做，做完（或两件都没有）就直接结束，不要输出任何文字") {
 		t.Fatalf("TurnEnd does not say to stop quietly:\n%s", TurnEnd)
 	}
 }

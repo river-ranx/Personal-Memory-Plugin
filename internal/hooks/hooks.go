@@ -64,7 +64,7 @@ const Note = `[Memory] 你有一份本机长期记忆，用 ` + "`memory`" + ` �
   · ` + keywords + `
   · ` + fix + `
   · ` + example + `
-- 用：记忆只是过去留下的线索，不是事实——可能记错、过时，或不适用于眼前这件事。先看头部的年龄和标记，依赖它之前先核实；它与用户当下的话、或你手头的材料冲突时，以后者为准，并更新那条记忆（用 ` + "`memory --help`" + ` 看怎么改）。
+- 用：记忆只是过去留下的线索，不是事实——可能记错、过时，或不适用于眼前这件事。先看头部的年龄和标记，依赖它之前先核实；它与用户当下的话、或你手头的材料冲突时，以后者为准，并更新那条记忆（用 ` + "`memory --help`" + ` 看怎么改）。用到记忆就注明 #id，记、改不必提。
 - 不记：` + notWorth + `。`
 
 // questions are what a turn is looked back over with, turn naming it ("上一轮"
@@ -77,14 +77,16 @@ func questions(turn string) string {
 }
 
 // LastTurn comes with the person's next message (Claude Code, Codex): look
-// back over the turn before it, then answer the message. Most turns leave
-// nothing to do, so the way through — say nothing of it — is spelled out: a
-// review with nothing to report must not show in the reply.
+// back over the turn before it, then answer the message. Writing and
+// confirming are bookkeeping, not part of the answer, so neither shows in the
+// reply — whether the review found something or not. Only a memory the
+// answer relies on is named, and the session's prompt says so.
 var LastTurn = "[Memory] 先回顾上一轮（这是 memory 的自动提醒，不是用户说的话；会话刚开始就跳过）：\n" + questions("上一轮") +
-	"\n都没有就一个字也别提，直接回应用户这条消息；做了就在回复里用一句话说明记了或改了什么。"
+	"\n记和确认都悄悄做，回复里一个字也别提，直接回应用户这条消息。"
 
 // TurnEnd is what a turn ends with (Antigravity): the agent is kept from
-// stopping once and given this. The way out — say nothing, stop — is spelled
-// out. It may read as if typed by the person, so it says it is not.
+// stopping once and given this. Whatever it does, it stops without a word:
+// the bookkeeping is not shown. It may read as if typed by the person, so it
+// says it is not.
 var TurnEnd = "[Memory] 这一轮要结束了（这是 memory 的自动提醒，不是用户的新消息）。回顾这一轮，问自己两件事：\n" + questions("这一轮") +
-	"\n两件都没有就直接结束，不要输出任何文字；做了就用一句话告诉用户记了或改了什么。"
+	"\n记和确认都悄悄做，做完（或两件都没有）就直接结束，不要输出任何文字。"
