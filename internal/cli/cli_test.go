@@ -398,6 +398,24 @@ func TestANewMemoryNamesItsKind(t *testing.T) {
 	}
 }
 
+// A text over store.LongContent is stored all the same, but the answer says it
+// is long for one thing and how to cut it down; a short one gets no remark.
+func TestALongTextIsStoredWithARemark(t *testing.T) {
+	r := newRun(t)
+	long := strings.Repeat("发版前要先核对签名证书是否在有效期内，", 14)
+	code, out := r.memory("", "add", long, "--kind", "practice", "--keywords", "codesign")
+	if code != 0 || !strings.HasPrefix(out, "Stored #1.\n") || !strings.Contains(out, "long for one thing") || !strings.Contains(out, "memory edit 1 --content") {
+		t.Fatalf("%d %q", code, out)
+	}
+	_, out = r.memory("", "add", strings.Repeat("上线前要先确认流水线里的公证步骤已经通过，", 14), "--kind", "practice", "--keywords", "notarize", "--json")
+	if !strings.Contains(out, `"tooLong":`) {
+		t.Fatalf("json: %q", out)
+	}
+	if code, out := r.memory("", "add", "签名由 CI 完成，本机不再有签名证书", "--kind", "fact", "--keywords", "codesign"); code != 0 || out != "Stored #3.\n" {
+		t.Fatalf("a short text gets no remark: %d %q", code, out)
+	}
+}
+
 // Keywords that only repeat the text are kept, and the answer names them, so
 // the next write gives words the text lacks.
 func TestKeywordsAlreadyInTheTextAreNamed(t *testing.T) {

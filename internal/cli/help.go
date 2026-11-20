@@ -206,7 +206,9 @@ EXAMPLES
 		help: `
 TEXT
   One memory is one thing, written so that a later session can act on it: what
-  to do, where, and why. At least 3 words (in Chinese, about 4 characters in a
+  to do, where, and why. One or two sentences: if it says two things, store two
+  memories; if it runs long it is probably a record of a process, so keep the
+  conclusion, the way to do it and the reason. At least 3 words (in Chinese, about 4 characters in a
   row or more; "提交用中文" is enough, "报销单" is not), at most 1000 characters. Give "-" as
   the text to read it from stdin, which is the way to pass quotes, backticks or
   several lines:
@@ -242,10 +244,12 @@ WHAT IS NOT STORED (each answer says why and what to do)
 WHAT IS NOT WORTH STORING (not checked: your judgment)
   Ask whether the text says what happened or what was learned. A record of what
   happened — "draft sent to my supervisor", "chapter 3 written", "meeting held",
-  "merged MR", "today I finished…" — is kept already by the mail, the document,
-  git or the pipeline: do not store it. If it holds a lesson, store only the
-  lesson. Nor what the source itself says and can be looked up again (where it
-  is, and why it matters, can be stored).
+  "merged MR", "bug fixed", "today I finished…" — is kept already by the mail,
+  the document, git or the pipeline: do not store it. If it holds a lesson,
+  store only the lesson. Nor one-off statistics, how an incident unfolded or the
+  steps of an investigation (keep the conclusion and what it rests on). Nor what
+  the source itself says and can be looked up again, such as pixel values, line
+  counts or how a function works (where it is, and why it matters, can be stored).
 
 SUPERSEDING
   --supersedes N replaces memory #N with this one. Give only the new text: the
@@ -255,13 +259,14 @@ SUPERSEDING
 
 ANSWERS
   Stored #12.                      stored; 12 is its id. A line may follow naming
-                                   keywords already in the text (still stored).
+                                   keywords already in the text, or saying the text is
+                                   over 250 characters and may be two memories (still stored).
   Not stored: already remembered   names the existing memory (#5), says "add it
                                    again with --supersedes #5" if yours is newer
                                    or more precise, otherwise leave it; then shows it.
   Not stored: refused: …           too short; say it in a sentence, or drop it.
   Not stored: invalid memory: …    text too long, or --kind missing or unknown.
-  With --json the same, as {"memory": …, "keywordsInText": […]} or
+  With --json the same, as {"memory": …, "keywordsInText": […], "tooLong": N} or
   {"error": …, "message": …}.
 
 EXAMPLES

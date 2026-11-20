@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"memory/internal/hooks"
 	"memory/internal/install"
@@ -341,6 +342,7 @@ func (c command) add() error {
 	// teaches the next write what a keyword is for.
 	inText := store.KeywordsInText(m.Content, d.Keywords)
 	_, dropped := store.CleanKeywords(d.Keywords)
+	length := utf8.RuneCountInString(m.Content)
 	if c.flags.has("json") {
 		answer := map[string]any{"memory": view(store.Hit{Record: m, Decay: 1})}
 		if len(inText) > 0 {
@@ -348,6 +350,9 @@ func (c command) add() error {
 		}
 		if len(dropped) > 0 {
 			answer["keywordsDropped"] = dropped
+		}
+		if length > store.LongContent {
+			answer["tooLong"] = length
 		}
 		return c.json(answer)
 	}
@@ -365,6 +370,9 @@ func (c command) add() error {
 	}
 	if len(inText) > 0 {
 		fmt.Fprintf(c.env.Stdout, "Keywords already in the text add nothing to finding it: %s. Next time give words the text lacks — a synonym, the name in another language, an abbreviation.\n", strings.Join(inText, ", "))
+	}
+	if length > store.LongContent {
+		fmt.Fprintf(c.env.Stdout, "This memory is %d characters, long for one thing. If it says more than one thing, split it: cut this one down with `memory edit %d --content …` and add the rest as its own memory. Keep the conclusion, the way to do it and the reason; leave out the process.\n", length, m.ID)
 	}
 	return nil
 }

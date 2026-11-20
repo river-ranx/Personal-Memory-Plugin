@@ -109,9 +109,10 @@ func TestThePromptLeavesTheJudgmentToTheAgent(t *testing.T) {
 		}
 	}
 	// Once a session, so it may take the room to set the write out on lines of
-	// its own, with an example, and the two ways to fix one; it may not grow
-	// past that.
-	if n := len([]rune(Note)); n > 830 {
+	// its own, with an example, and the two ways to fix one, and to say what a
+	// memory looks like (one thing, two sentences) and what is not worth one;
+	// it may not grow past that.
+	if n := len([]rune(Note)); n > 950 {
 		t.Fatalf("the prompt is %d characters: it goes in front of every session", n)
 	}
 }

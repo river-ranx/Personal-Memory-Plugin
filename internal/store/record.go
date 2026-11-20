@@ -46,6 +46,12 @@ const KeywordLimit = 10
 // document or a log, and every search that returns it would carry all of it.
 const ContentLimit = 1000
 
+// LongContent is where a memory starts to read as long for one thing, in
+// characters. Past it the text is stored all the same, but the answer says so:
+// a text this long is usually two memories, or a record of a process with the
+// conclusion buried in it, and the agent that wrote it can still split or cut it.
+const LongContent = 250
+
 // Record is one memory with everything the store keeps about it.
 type Record struct {
 	ID       int64
