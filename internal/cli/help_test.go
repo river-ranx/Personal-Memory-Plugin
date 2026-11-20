@@ -110,7 +110,7 @@ func TestEveryCommandInTheHelpUsesFlagsItTakes(t *testing.T) {
 func TestTheHelpStatesTheLimitsTheStoreHas(t *testing.T) {
 	add, search, list, confirm := commands["add"].helpText("add"), commands["search"].helpText("search"), commands["list"].helpText("list"), commands["confirm"].helpText("confirm")
 	for text, wants := range map[string][]string{
-		add:     {fmt.Sprint(store.ContentLimit) + " characters", fmt.Sprint(store.TitleLimit) + " characters", "at most " + fmt.Sprint(store.KeywordLimit)},
+		add:     {fmt.Sprint(store.ContentLimit) + " characters", "at most " + fmt.Sprint(store.KeywordLimit)},
 		search:  {"at most " + fmt.Sprint(store.MaxSearchLimit)},
 		list:    {"at most " + fmt.Sprint(store.MaxListLimit)},
 		confirm: {string(store.OutcomeUsed), string(store.OutcomeVerified), string(store.OutcomeContradicted)},
@@ -133,7 +133,7 @@ func TestTheHelpStatesTheLimitsTheStoreHas(t *testing.T) {
 
 // The header in the help is the header a result has.
 func TestTheResultHeaderInTheHelpIsTheRealOne(t *testing.T) {
-	header := regexp.MustCompile(`^#\d+ · (preference|fact|rule|decision|practice) · (.+ · )?written (today|\d+(d|mo|y) ago) \(\d{4}-\d{2}-\d{2}\)( · .+)?$`)
+	header := regexp.MustCompile(`^#\d+ · (preference|fact|rule|decision|practice) · written (today|\d+(d|mo|y) ago) \(\d{4}-\d{2}-\d{2}\)( · .+)?$`)
 	var sample []string
 	for _, line := range strings.Split(help(), "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "#12 · ") {
@@ -144,7 +144,7 @@ func TestTheResultHeaderInTheHelpIsTheRealOne(t *testing.T) {
 		t.Fatalf("the sample header: %q", sample)
 	}
 	r := newRun(t)
-	r.add("提交信息用中文，前缀照 git log 的写法", "--kind", "rule", "--title", "提交规范")
+	r.add("提交信息用中文，前缀照 git log 的写法", "--kind", "rule")
 	_, out := r.memory("", "search", "提交信息")
 	if got := strings.SplitN(out, "\n", 2)[0]; !header.MatchString(got) {
 		t.Fatalf("a real header does not read as the help says: %q", got)

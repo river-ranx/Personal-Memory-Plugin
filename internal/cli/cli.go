@@ -249,7 +249,7 @@ func (c command) add() error {
 		return usageErr("add needs the text to remember")
 	}
 	d := store.Draft{
-		Title: c.flags.one("title"), Content: content, Kind: c.flags.one("kind"),
+		Content: content, Kind: c.flags.one("kind"),
 		Keywords: splitWords(append(c.flags.all("keywords"), c.flags.all("keyword")...)), Project: c.project(),
 	}
 	if v := c.flags.one("supersedes"); v != "" {
@@ -259,7 +259,17 @@ func (c command) add() error {
 		}
 		d.Supersedes = &id
 	}
-	m, err := c.s.Write(d)
+	// The kind says how a later session treats the memory, and left to a
+	// default it was left to chance: an agent's own reading of "the person
+	// prefers…" stored as a fact, flagged out of date after a quarter. So a new
+	// memory names it; one that supersedes another keeps that one's.
+	var m store.Record
+	var err error
+	if strings.TrimSpace(d.Kind) == "" && d.Supersedes == nil {
+		err = fmt.Errorf("%w: say which kind of memory this is with --kind:\n%s", store.ErrInvalid, kindGuide)
+	} else {
+		m, err = c.s.Write(d)
+	}
 	var duplicate *store.Duplicate
 	switch {
 	case errors.As(err, &duplicate):
@@ -290,10 +300,20 @@ func (c command) add() error {
 	}
 	// Housekeeping rides on a write, which is rare; a failure is retried at the next.
 	_ = c.s.Prune()
+	// Keywords that only repeat the text are stored all the same; saying so
+	// teaches the next write what a keyword is for.
+	inText := store.KeywordsInText(m.Content, d.Keywords)
 	if c.flags.has("json") {
-		return c.json(map[string]any{"memory": view(store.Hit{Record: m, Decay: 1})})
+		answer := map[string]any{"memory": view(store.Hit{Record: m, Decay: 1})}
+		if len(inText) > 0 {
+			answer["keywordsInText"] = inText
+		}
+		return c.json(answer)
 	}
 	fmt.Fprintf(c.env.Stdout, "Stored %s.\n", store.FormatID(m.ID))
+	if len(inText) > 0 {
+		fmt.Fprintf(c.env.Stdout, "Keywords already in the text add nothing to finding it: %s. Next time give words the text lacks — a synonym, the name in another language, an abbreviation.\n", strings.Join(inText, ", "))
+	}
 	return nil
 }
 
@@ -453,7 +473,6 @@ func (c command) json(v any) error {
 type memoryView struct {
 	ID           int64   `json:"id"`
 	Kind         string  `json:"kind"`
-	Title        string  `json:"title,omitempty"`
 	Content      string  `json:"content"`
 	Written      string  `json:"written"`
 	Confidence   string  `json:"confidence"`
@@ -467,7 +486,7 @@ type memoryView struct {
 
 func view(h store.Hit) memoryView {
 	v := memoryView{
-		ID: h.ID, Kind: h.Kind, Title: h.Title, Content: h.Content, Written: day(h.CreatedAt),
+		ID: h.ID, Kind: h.Kind, Content: h.Content, Written: day(h.CreatedAt),
 		Confidence: h.Confidence, Verified: h.Verified, Contradicted: h.Contradicted,
 		Archived: h.State == store.StateArchived, Decay: h.Decay,
 	}
@@ -492,11 +511,11 @@ func views(hits []store.Hit) []memoryView {
 // line, then its text as written. The header comes first because it says how
 // to treat what follows: what kind it is, how old, how far to trust it.
 //
-//	#12 · preference · 引用格式 · written 3d ago (2026-11-19) · verified
+//	#12 · preference · written 3d ago (2026-11-19) · verified
 //	论文引用一律用 GB/T 7714 著者-出版年制；导师说过不要脚注。
 //
 // Besides the id, kind and age, the header names only what is out of the
-// ordinary: a title; a confidence above observed; a contradiction; another
+// ordinary: a confidence above observed; a contradiction; another
 // project's directory; a replacement; an archive; no use for a quarter.
 func (c command) printAll(hits []store.Hit, asked *string) {
 	now := time.Now()
@@ -505,9 +524,6 @@ func (c command) printAll(hits []store.Hit, asked *string) {
 			fmt.Fprintln(c.env.Stdout)
 		}
 		parts := []string{store.FormatID(h.ID), h.Kind}
-		if h.Title != "" {
-			parts = append(parts, h.Title)
-		}
 		parts = append(parts, fmt.Sprintf("written %s (%s)", ago(h.CreatedAt, now), day(h.CreatedAt)))
 		if h.Confidence != store.ConfidenceObserved {
 			parts = append(parts, h.Confidence)

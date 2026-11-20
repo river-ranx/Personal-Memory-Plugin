@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -53,9 +54,13 @@ func (r run) backdate(days int) {
 
 var stored = regexp.MustCompile(`^Stored #(\d+)\.\n$`)
 
-// add takes a sentence and nothing else; the answer is its number.
+// add writes a memory, a fact unless the arguments name a kind or a memory
+// it supersedes; the answer is its number.
 func (r run) add(args ...string) string {
 	r.t.Helper()
+	if !slices.Contains(args, "--kind") && !slices.Contains(args, "--supersedes") {
+		args = append(args, "--kind", "fact")
+	}
 	code, out := r.memory("", append([]string{"add"}, args...)...)
 	m := stored.FindStringSubmatch(out)
 	if code != 0 || m == nil {
@@ -108,7 +113,7 @@ func TestAMemoryIsWrittenWithJustItsWordsAndFoundByItsNumber(t *testing.T) {
 // The header names what is out of the ordinary and nothing else.
 func TestTheHeaderNamesOnlyWhatIsOutOfTheOrdinary(t *testing.T) {
 	r := newRun(t)
-	r.add("提交信息用中文，前缀照 git log 的写法", "--kind", "rule", "--title", "提交规范")
+	r.add("提交信息用中文，前缀照 git log 的写法", "--kind", "rule")
 	r.add("签名由 CI 完成", "--project", "/work/other")
 	// Three verifications, on three days, make a memory verified.
 	for range 3 {
@@ -119,7 +124,7 @@ func TestTheHeaderNamesOnlyWhatIsOutOfTheOrdinary(t *testing.T) {
 	}
 	r.memory("", "confirm", "2", "--outcome", "contradicted", "--note", "改了")
 	_, out := r.memory("", "search", "提交 签名")
-	for _, want := range []string{"#1 · rule · 提交规范 · written today", " · verified\n", "#2 · fact · written today", " · contradicted 1x · /work/other\n"} {
+	for _, want := range []string{"#1 · rule · written today", " · verified\n", "#2 · fact · written today", " · contradicted 1x · /work/other\n"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("lacks %q:\n%s", want, out)
 		}
@@ -254,20 +259,20 @@ func TestNothingFoundSaysWhatToTryNext(t *testing.T) {
 
 func TestWhatIsNotWorthKeepingIsNotStoredAndTheAnswerSaysWhy(t *testing.T) {
 	r := newRun(t)
-	if code, out := r.memory("", "add", "ok"); code != 1 || !strings.HasPrefix(out, "Not stored: refused") || !strings.Contains(out, "too short to be a memory") {
+	if code, out := r.memory("", "add", "ok", "--kind", "fact"); code != 1 || !strings.HasPrefix(out, "Not stored: refused") || !strings.Contains(out, "too short to be a memory") {
 		t.Fatalf("thin: %d %q", code, out)
 	}
-	if code, out := r.memory("", "add", "报销", "--title", "报销流程", "--keywords", "OA,发票,财务"); code != 1 || !strings.Contains(out, "too short to be a memory") {
+	if code, out := r.memory("", "add", "报销", "--kind", "rule", "--keywords", "OA,发票,财务"); code != 1 || !strings.Contains(out, "too short to be a memory") {
 		t.Fatalf("a label with keywords: %d %q", code, out)
 	}
-	if code, out := r.memory("", "add", strings.Repeat("字", 1200)); code != 1 || !strings.Contains(out, "at most 1000") || !strings.Contains(out, "split it") {
+	if code, out := r.memory("", "add", strings.Repeat("字", 1200), "--kind", "fact"); code != 1 || !strings.Contains(out, "at most 1000") || !strings.Contains(out, "split it") {
 		t.Fatalf("too long: %d %q", code, out)
 	}
 	// Private-looking text is no concern of the gate: this is the owner's machine.
 	r.add("值班手机 13812345678，测试库口令放在 1Password")
 	first := r.add("升 daemon 协议号前先在 reserved-numbers.md 占号")
 	// A repeat shows what it repeats and the exact command to replace it.
-	code, out := r.memory("", "add", "改协议号之前，先在 reserved-numbers.md 里占号")
+	code, out := r.memory("", "add", "改协议号之前，先在 reserved-numbers.md 里占号", "--kind", "fact")
 	if code != 1 || !strings.Contains(out, "already remembered") || !strings.Contains(out, "#"+first+" ·") || !strings.Contains(out, "--supersedes #"+first+";") {
 		t.Fatalf("a repeat: %d %q", code, out)
 	}
@@ -370,14 +375,42 @@ func TestAReportRepeatedTheSameDayIsSaidToCountOnce(t *testing.T) {
 	}
 }
 
-// The header is one line, whatever the title was.
-func TestATitleWithNewlinesStaysOnTheHeaderLine(t *testing.T) {
+// A new memory names its kind: left to a default, agents left it, and the
+// person's preferences were kept as facts that go stale. The answer lists the
+// kinds to choose from. A memory that supersedes another keeps that one's.
+func TestANewMemoryNamesItsKind(t *testing.T) {
 	r := newRun(t)
-	r.add("提交信息用中文，前缀照 git log 的写法", "--kind", "RULE", "--title", "第一行\n第二行")
-	_, out := r.memory("", "search", "提交信息")
-	header, body, _ := strings.Cut(out, "\n")
-	if !strings.HasPrefix(header, "#1 · rule · 第一行 第二行 · written today") || !strings.HasPrefix(body, "提交信息用中文") {
-		t.Fatalf("%q", out)
+	code, out := r.memory("", "add", "提交信息用中文，前缀照 git log 的写法")
+	if code != 1 || !strings.HasPrefix(out, "Not stored: invalid memory: say which kind") || !strings.Contains(out, kindGuide) {
+		t.Fatalf("no kind: %d %q", code, out)
+	}
+	if code, out := r.memory("", "add", "提交信息用中文，前缀照 git log 的写法", "--json"); code != 1 || !strings.Contains(out, `"error":"invalid"`) {
+		t.Fatalf("no kind, as JSON: %d %q", code, out)
+	}
+	old := r.add("提交信息用中文，前缀照 git log 的写法", "--kind", "RULE")
+	r.add("提交信息用英文，前缀照 git log 的写法", "--supersedes", old)
+	if _, out := r.memory("", "search", "提交信息"); !strings.HasPrefix(out, "#2 · rule · ") {
+		t.Fatalf("the kind carried over: %q", out)
+	}
+}
+
+// Keywords that only repeat the text are kept, and the answer names them, so
+// the next write gives words the text lacks.
+func TestKeywordsAlreadyInTheTextAreNamed(t *testing.T) {
+	r := newRun(t)
+	code, out := r.memory("", "add", "发版只走 release 分支，因为 main 不触发签名流水线", "--kind", "rule", "--keywords", "发版,签名,codesign")
+	if code != 0 || !strings.HasPrefix(out, "Stored #1.\nKeywords already in the text add nothing to finding it: 发版, 签名.") {
+		t.Fatalf("%d %q", code, out)
+	}
+	if _, out := r.memory("", "search", "codesign"); !strings.HasPrefix(out, "#1 · ") {
+		t.Fatalf("found by the keyword the text lacks: %q", out)
+	}
+	_, out = r.memory("", "add", "staging 的数据库账号只读，写入要走变更工单", "--kind", "rule", "--keywords", "数据库,mysql", "--json")
+	if !strings.Contains(out, `"keywordsInText":["数据库"]`) {
+		t.Fatalf("json: %q", out)
+	}
+	if r.add("签名由 CI 完成，本机不再有签名证书", "--keywords", "codesign") != "3" {
+		t.Fatal("keywords the text lacks get no remark")
 	}
 }
 

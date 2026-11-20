@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -45,6 +46,10 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("could not prepare the memory database: %w", err)
 	}
+	if err := dropTitles(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("could not upgrade the memory database: %w", err)
+	}
 	return &Store{db: db, now: func() uint64 { return uint64(max(time.Now().Unix(), 0)) }}, nil
 }
 
@@ -52,7 +57,7 @@ func Open(path string) (*Store, error) {
 func (s *Store) Close() error { return s.db.Close() }
 
 // schema is every table, created when the database is new; opening an
-// existing one changes nothing.
+// existing one changes nothing (but see [dropTitles]).
 const schema = `
 -- A memory's id is a number, 1, 2, 3…, never given again once used.
 -- supersedes names the memory this one replaced, set once, when it is
@@ -60,7 +65,6 @@ const schema = `
 -- that name it (see replaced in record.go), so nothing is kept on the old row.
 CREATE TABLE IF NOT EXISTS memories (
 	id          INTEGER PRIMARY KEY AUTOINCREMENT,
-	title       TEXT,
 	content     TEXT NOT NULL,
 	kind        TEXT NOT NULL,
 	keywords    TEXT NOT NULL DEFAULT '',
@@ -83,18 +87,74 @@ CREATE TABLE IF NOT EXISTS memory_events (
 	note      TEXT
 );
 CREATE INDEX IF NOT EXISTS memory_events_by_memory ON memory_events (memory_id, at);
+` + ftsSchema
 
+// ftsSchema is the full-text index.
+const ftsSchema = `
 -- Columns hold text already cut into words (tokens), joined by spaces, so
 -- unicode61 only splits on those spaces: that is how a two-character Chinese
 -- word like 报销 becomes searchable, which FTS5's own tokenizers cannot do.
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
 	memory_id UNINDEXED,
-	title,
 	keywords,
 	body,
 	tokenize = 'unicode61 remove_diacritics 2'
 );
 `
+
+// dropTitles upgrades a database from when a memory had a title. Agents left
+// it empty, and where one was given it only repeated the text, which a result
+// shows whole. A title's words become the first of its memory's keywords, so
+// whatever was found by its title still is; then the column goes, and the
+// full-text index is built again without it. Inside one transaction, which
+// checks again for the column: two processes may open an old database at once.
+func dropTitles(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var titled int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name = 'title'`).Scan(&titled); err != nil || titled == 0 {
+		return err
+	}
+	type row struct {
+		id                       int64
+		title, keywords, content string
+	}
+	var all []row
+	rows, err := tx.Query(`SELECT id, COALESCE(title, ''), keywords, content FROM memories`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.id, &r.title, &r.keywords, &r.content); err != nil {
+			rows.Close()
+			return err
+		}
+		all = append(all, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, stmt := range []string{`ALTER TABLE memories DROP COLUMN title`, `DROP TABLE memories_fts`, ftsSchema} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return err
+		}
+	}
+	for _, r := range all {
+		keywords := cleanKeywords([]string{r.title, r.keywords})
+		if _, err := tx.Exec(`UPDATE memories SET keywords = ?1 WHERE id = ?2`, strings.Join(keywords, " "), r.id); err != nil {
+			return err
+		}
+		if err := index(tx, r.id, keywords, r.content); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
 
 func (s *Store) inTx(body func(*sql.Tx) error) error {
 	tx, err := s.db.Begin()

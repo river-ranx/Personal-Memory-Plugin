@@ -29,7 +29,7 @@ func TestTheDuplicateThresholdSeparatesRewordingFromSharedTopic(t *testing.T) {
 
 func TestARepeatIsNotStoredAndPointsAtWhatItRepeats(t *testing.T) {
 	s := open(t)
-	kept := write(t, s, Draft{Title: "协议号先占号", Content: "升 daemon 协议号前先在 reserved-numbers.md 占号", Kind: KindRule})
+	kept := write(t, s, Draft{Content: "升 daemon 协议号前先在 reserved-numbers.md 占号", Kind: KindRule})
 	_, err := s.Write(Draft{Content: "改协议号之前，先在 reserved-numbers.md 里占号", Kind: KindRule})
 	var dup *Duplicate
 	if !errors.As(err, &dup) || len(dup.Existing) != 1 || dup.Existing[0].ID != kept.ID {

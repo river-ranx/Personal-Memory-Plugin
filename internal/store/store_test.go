@@ -1,8 +1,10 @@
 package store
 
 import (
+	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -71,12 +73,12 @@ func TestAMemoryNeedsOnlyItsWords(t *testing.T) {
 		}
 	}
 	r := write(t, s, Draft{Content: "喜欢先写测试"})
-	if r.Kind != KindFact || r.Confidence != ConfidenceObserved || r.Title != "" || len(r.Keywords) != 0 {
+	if r.Kind != KindFact || r.Confidence != ConfidenceObserved || len(r.Keywords) != 0 {
 		t.Fatalf("stored %+v", r)
 	}
 	r = write(t, s, Draft{Content: "新增接口先在 proto 里占号", Kind: KindRule,
-		Title: "接口占号", Keywords: []string{" tdd ", "test first", "TDD", ""}})
-	if len(r.Keywords) != 3 || r.Keywords[0] != "tdd" || r.Keywords[1] != "test" || r.Keywords[2] != "first" || r.Title != "接口占号" {
+		Keywords: []string{" tdd ", "test first", "TDD", ""}})
+	if len(r.Keywords) != 3 || r.Keywords[0] != "tdd" || r.Keywords[1] != "test" || r.Keywords[2] != "first" {
 		t.Fatalf("stored %+v", r)
 	}
 }
@@ -312,7 +314,7 @@ func TestIDsAreCountedUpAndNeverReused(t *testing.T) {
 // query about two topics returns both, not only the one that matches harder.
 func TestAQueryAboutTwoTopicsFindsBothInASmallStore(t *testing.T) {
 	s := open(t)
-	strong := write(t, s, Draft{Title: "提交规范", Content: "提交信息用中文，前缀照 git log 的写法", Kind: KindRule, Keywords: []string{"提交", "commit"}})
+	strong := write(t, s, Draft{Content: "提交信息用中文，前缀照 git log 的写法", Kind: KindRule, Keywords: []string{"提交", "commit"}})
 	a := write(t, s, Draft{Content: "发版只走 release 分支，因为 main 不触发签名流水线", Kind: KindRule})
 	b := write(t, s, Draft{Content: "签名由 CI 完成，本机不再有签名证书", Kind: KindFact})
 	hits, err := s.Search("签名 提交", nil, 5)
@@ -376,5 +378,64 @@ func TestAnAbbreviationIsFound(t *testing.T) {
 	}
 	if hits, _ := s.Search("to is of the", nil, 5); len(hits) != 0 {
 		t.Fatalf("function words matched %v", ids(hits))
+	}
+}
+
+// A database from when memories had a title opens as one without: the title's
+// words become the memory's first keywords, so a memory found by its title is
+// still found by it, and the index is built again without the column.
+func TestADatabaseWithTitlesIsUpgraded(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.db")
+	old, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		`CREATE TABLE memories (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, content TEXT NOT NULL, kind TEXT NOT NULL,
+			keywords TEXT NOT NULL DEFAULT '', confidence TEXT NOT NULL DEFAULT 'observed', project TEXT, supersedes INTEGER,
+			state TEXT NOT NULL DEFAULT 'active', created_at INTEGER NOT NULL)`,
+		`CREATE VIRTUAL TABLE memories_fts USING fts5(memory_id UNINDEXED, title, keywords, body, tokenize = 'unicode61 remove_diacritics 2')`,
+		`INSERT INTO memories (title, content, kind, keywords, created_at) VALUES ('报销流程', '发票原件要在月底前交到财务', 'rule', 'OA', 1)`,
+		`INSERT INTO memories (title, content, kind, keywords, created_at) VALUES (NULL, '发版只走 release 分支', 'rule', '', 2)`,
+	} {
+		if _, err := old.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old.Close()
+
+	for opening := range 2 { // and a second open changes nothing
+		s, err := Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := countRows(t, s, `SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name = 'title'`); n != 0 {
+			t.Fatal("the title column is still there")
+		}
+		r, err := load(s.db, 1)
+		if err != nil || strings.Join(r.Keywords, ",") != "报销流程,OA" {
+			t.Fatalf("keywords %q err %v", r.Keywords, err)
+		}
+		for query, want := range map[string]int64{"报销": 1, "oa": 1, "release": 2} {
+			if hits, err := s.Search(query, nil, 5); err != nil || len(hits) != 1 || hits[0].ID != want {
+				t.Fatalf("%q: %v %v", query, ids(hits), err)
+			}
+		}
+		if opening == 0 {
+			if _, err := s.Write(Draft{Content: "签名由 CI 完成，本机不再有签名证书", Kind: KindFact}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		s.Close()
+	}
+}
+
+// A keyword whose every word is a word of the text adds nothing to finding it;
+// one with a word the text lacks does.
+func TestKeywordsInTheTextAreNamed(t *testing.T) {
+	text := "城镇化率一律用常住人口口径，因为统计年鉴 2018 年以前的户籍口径和之后不可比"
+	got := KeywordsInText(text, []string{"城镇化率", "口径", "urbanization", "户口", "统计年鉴", "人口统计", "a"})
+	if strings.Join(got, ",") != "城镇化率,口径,统计年鉴,a" {
+		t.Fatalf("in the text: %q", got)
 	}
 }

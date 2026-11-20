@@ -78,9 +78,9 @@ func insert(tx *sql.Tx, d Draft, now uint64) (int64, error) {
 		}
 	}
 	res, err := tx.Exec(`INSERT INTO memories
-                 (title, content, kind, keywords, confidence, project, supersedes, state, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'active', ?8)`,
-		nullIfEmpty(d.Title), d.Content, d.Kind, strings.Join(d.Keywords, " "),
+                 (content, kind, keywords, confidence, project, supersedes, state, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active', ?7)`,
+		d.Content, d.Kind, strings.Join(d.Keywords, " "),
 		ConfidenceObserved, d.Project, intArg(d.Supersedes), clampI64(now),
 	)
 	if err != nil {
@@ -90,7 +90,7 @@ func insert(tx *sql.Tx, d Draft, now uint64) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	return id, index(tx, id, d.Title, d.Keywords, d.Content)
+	return id, index(tx, id, d.Keywords, d.Content)
 }
 
 // SetArchived archives or restores a memory. Archived, it is never retrieved.
@@ -251,9 +251,9 @@ func (s *Store) recordHits(ids []int64, now uint64) error {
 }
 
 // index adds a memory's tokens to the full-text index.
-func index(tx *sql.Tx, id int64, title string, keywords []string, content string) error {
-	_, err := tx.Exec("INSERT INTO memories_fts (memory_id, title, keywords, body) VALUES (?1, ?2, ?3, ?4)",
-		id, indexText(title), indexText(strings.Join(keywords, " ")), indexText(content))
+func index(tx *sql.Tx, id int64, keywords []string, content string) error {
+	_, err := tx.Exec("INSERT INTO memories_fts (memory_id, keywords, body) VALUES (?1, ?2, ?3)",
+		id, indexText(strings.Join(keywords, " ")), indexText(content))
 	return err
 }
 

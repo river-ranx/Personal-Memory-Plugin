@@ -69,6 +69,22 @@ func isStopTerm(token string) bool {
 	return stop
 }
 
+// KeywordsInText is the keywords that add nothing to finding a memory with
+// this text: every word a search would cut from them is a word of the text
+// already (or there is none, as with a single letter), so the text is found by
+// them without the keyword. A keyword earns its place with a word the text
+// lacks: a synonym, the name in another language, an abbreviation.
+func KeywordsInText(content string, keywords []string) []string {
+	text := wordSet(content)
+	var redundant []string
+	for _, k := range keywords {
+		if !slices.ContainsFunc(tokens(k), func(t string) bool { _, in := text[t]; return !in }) {
+			redundant = append(redundant, k)
+		}
+	}
+	return redundant
+}
+
 // indexText is text as the full-text index stores it: its tokens joined by
 // single spaces, which the index's unicode61 tokenizer splits on and nothing
 // else, since a token holds only letters and digits.

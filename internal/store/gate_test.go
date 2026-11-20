@@ -7,11 +7,11 @@ import (
 )
 
 // A word or two is a label, not a memory: it says nothing to whoever finds it,
-// whatever its kind, and keywords or a title do not make up for it.
+// whatever its kind, and keywords do not make up for it.
 func TestTextTooShortToSayAnythingIsRefused(t *testing.T) {
 	for _, text := range []string{"ok", "好", "好的", "ok!!", "…", "a b", "报销", "release", "报销单", "用 pnpm", "CI DB"} {
 		for _, kind := range Kinds {
-			d := Draft{Content: text, Kind: kind, Title: "发版规则", Keywords: []string{"release", "发版", "签名"}}
+			d := Draft{Content: text, Kind: kind, Keywords: []string{"release", "发版", "签名"}}
 			if err := screen(d); !errors.Is(err, ErrRefused) {
 				t.Fatalf("%q as a %s: %v", text, kind, screen(d))
 			}

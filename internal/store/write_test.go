@@ -11,9 +11,9 @@ import (
 func TestSupersedingKeepsWhatTheNewTextDoesNotSay(t *testing.T) {
 	s := open(t)
 	old := write(t, s, Draft{Content: "发版只走 release 分支，因为 main 不触发签名流水线", Kind: KindRule,
-		Title: "发版规则", Keywords: []string{"发版", "release", "notarize"}})
+		Keywords: []string{"发版", "release", "notarize"}})
 	fresh := write(t, s, Draft{Content: "发版只走 release 分支，main 已经配置了签名流水线", Supersedes: &old.ID})
-	if fresh.Kind != KindRule || fresh.Title != "发版规则" || strings.Join(fresh.Keywords, ",") != "发版,release,notarize" {
+	if fresh.Kind != KindRule || strings.Join(fresh.Keywords, ",") != "发版,release,notarize" {
 		t.Fatalf("stored %+v", fresh)
 	}
 	if hits, _ := s.Search("notarize", nil, 5); len(hits) != 1 || hits[0].ID != fresh.ID {
@@ -22,8 +22,8 @@ func TestSupersedingKeepsWhatTheNewTextDoesNotSay(t *testing.T) {
 
 	// What is said is what is kept.
 	third := write(t, s, Draft{Content: "发版改走 main 分支，签名由 CI 自动完成", Kind: KindDecision,
-		Title: "发版决定", Keywords: []string{"main"}, Supersedes: &fresh.ID})
-	if third.Kind != KindDecision || third.Title != "发版决定" || strings.Join(third.Keywords, ",") != "main" {
+		Keywords: []string{"main"}, Supersedes: &fresh.ID})
+	if third.Kind != KindDecision || strings.Join(third.Keywords, ",") != "main" {
 		t.Fatalf("stored %+v", third)
 	}
 	// Blank keywords say nothing either.
@@ -115,18 +115,13 @@ func TestAMemoryIsReportedOncePerDayPerOutcome(t *testing.T) {
 	}
 }
 
-// A title is one line, because it sits in a result's header; a kind is
-// understood however it is capitalised; keywords are a few words, once each.
-func TestATitleIsOneLineAndKindAndKeywordsAreTidied(t *testing.T) {
+// A kind is understood however it is capitalised; keywords are a few words,
+// once each.
+func TestKindAndKeywordsAreTidied(t *testing.T) {
 	s := open(t)
-	r := write(t, s, Draft{Content: "提交信息用中文，前缀照 git log 的写法", Kind: " Rule ", Title: "第一行\n\n  第二行\t第三行 "})
-	if r.Title != "第一行 第二行 第三行" || r.Kind != KindRule {
-		t.Fatalf("stored title %q kind %q", r.Title, r.Kind)
-	}
-	long := strings.Repeat("长", 100)
-	r = write(t, s, Draft{Content: "发版只走 release 分支，因为 main 不触发签名流水线", Title: long})
-	if n := len([]rune(r.Title)); n != TitleLimit {
-		t.Fatalf("a title of %d characters", n)
+	r := write(t, s, Draft{Content: "提交信息用中文，前缀照 git log 的写法", Kind: " Rule "})
+	if r.Kind != KindRule {
+		t.Fatalf("stored kind %q", r.Kind)
 	}
 	var words []string
 	for i := range 25 {

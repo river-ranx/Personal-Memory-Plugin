@@ -37,10 +37,6 @@ const (
 	StateArchived = "archived"
 )
 
-// TitleLimit is how long a title may be, in characters: a name, not text. A
-// longer one is cut.
-const TitleLimit = 60
-
 // KeywordLimit is how many keywords a memory keeps: the words it is found by,
 // which weigh twice a word of the text, so they are not a place to pile words.
 const KeywordLimit = 10
@@ -53,7 +49,6 @@ const ContentLimit = 1000
 // Record is one memory with everything the store keeps about it.
 type Record struct {
 	ID       int64
-	Title    string
 	Content  string
 	Kind     string
 	Keywords []string
@@ -69,10 +64,10 @@ type Record struct {
 
 // Draft is a memory on its way in. The store owns the id and the clock.
 //
-// Only Content is required. Kind defaults to a fact; Title and Keywords are
-// extra handles for search, and Project only changes how a memory ranks.
+// Only Content is required. Kind defaults to a fact (the command line asks an
+// agent to name it); Keywords are extra handles for search, and Project only
+// changes how a memory ranks.
 type Draft struct {
-	Title    string
 	Content  string
 	Kind     string
 	Keywords []string
@@ -93,13 +88,10 @@ func invalid(format string, args ...any) error {
 }
 
 // inherit fills what d leaves out from the memory it replaces: a rule that is
-// reworded stays a rule, under its title, found by the words it was found by.
+// reworded stays a rule, found by the words it was found by.
 func (d Draft) inherit(old Record) Draft {
 	if d.Kind == "" {
 		d.Kind = old.Kind
-	}
-	if strings.TrimSpace(d.Title) == "" {
-		d.Title = old.Title
 	}
 	if len(cleanKeywords(d.Keywords)) == 0 {
 		d.Keywords = old.Keywords
@@ -115,11 +107,6 @@ func (d Draft) normalize() (Draft, error) {
 	}
 	if n := utf8.RuneCountInString(d.Content); n > ContentLimit {
 		return d, invalid("content is %d characters, at most %d: one memory is one thing — split it, or keep only what will matter later", n, ContentLimit)
-	}
-	// A title is one line: it sits in a result's header.
-	d.Title = strings.Join(strings.Fields(d.Title), " ")
-	if title := []rune(d.Title); len(title) > TitleLimit {
-		d.Title = strings.TrimSpace(string(title[:TitleLimit]))
 	}
 	d.Kind = strings.ToLower(strings.TrimSpace(d.Kind))
 	if d.Kind == "" {
@@ -158,7 +145,7 @@ const supersededBy = `(SELECT MAX(next.id) FROM memories next WHERE next.superse
 const replaced = supersededBy + ` IS NOT NULL`
 
 // recordColumns is what scanRecord reads, prefixed for a join.
-const recordColumns = `m.id, m.title, m.content, m.kind, m.keywords, m.confidence, m.project,
+const recordColumns = `m.id, m.content, m.kind, m.keywords, m.confidence, m.project,
        ` + supersededBy + `, m.state, m.created_at`
 
 type scanner interface{ Scan(...any) error }
@@ -168,17 +155,16 @@ func scanRecord(row scanner, extra ...any) (Record, error) {
 	var (
 		id, createdAt                              int64
 		content, kind, keywords, confidence, state string
-		title, project                             sql.NullString
+		project                                    sql.NullString
 		supersededBy                               sql.NullInt64
 	)
-	dest := append([]any{&id, &title, &content, &kind, &keywords, &confidence, &project,
+	dest := append([]any{&id, &content, &kind, &keywords, &confidence, &project,
 		&supersededBy, &state, &createdAt}, extra...)
 	if err := row.Scan(dest...); err != nil {
 		return Record{}, err
 	}
 	r := Record{
 		ID:           id,
-		Title:        title.String,
 		Content:      content,
 		Kind:         kind,
 		Keywords:     strings.Fields(keywords),

@@ -37,22 +37,41 @@ const (
 	notWorth = "只说发生了什么、没说学到了什么的流水账（做了什么、进展到哪、发给了谁、开了什么会；里面有教训就只记教训），以及原文、文件里随时查得到的内容"
 )
 
+// write is the command a write takes, and kinds, keywords and example how to
+// fill it — said in the prompt itself, on lines of their own: an agent writes
+// the command as the prompt shows it, and what was left to the skill and the
+// help was left out (a store of facts with no keywords, the person's
+// preferences among them). The kind is chosen by how a later session should
+// treat the memory; a keyword earns its place with a word the text lacks, since
+// every word of the text is searchable already. The example shows both, in
+// words of no one trade.
+const (
+	write    = "`memory add \"<一句话>\" --kind <类型> --keywords <词,词>`"
+	kinds    = "--kind 必填，按以后怎么用它选：rule 必须照做｜decision 定下的选择及理由｜preference 用户的习惯、口味和纠正｜practice 可复用的做法｜fact 事情现在的样子（会过时）"
+	keywords = "--keywords 写正文里没有、以后可能拿来搜的词：同义词、另一种语言的叫法、缩写"
+	example  = "例：`memory add \"周报先给组长过目再发全组，她要先核对数字\" --kind preference --keywords 汇报,review`"
+)
+
 // Note is the prompt a session starts with. It names the two things the agent
 // does with its memory — search, write — and says what to use for each; the
 // memory skill has the rest.
 const Note = `[Memory] 你有一份本机长期记忆，用 ` + "`memory`" + ` 命令读写（用法见 memory skill；不确定就先 ` + "`memory --help`" + `，不要猜参数）。
 - 查：开始一项任务、话题换了、遇到可能以前讨论过的事、要下结论或给建议之前，先 ` + "`memory search <关键词>`" + `。
-- 记：由你判断，标准是换一个新会话还用得上——` + worth + `。一条一句，写成不看今天的对话也能懂，用 ` + "`memory add \"…\"`" + `。用户明确要你记住的，一定记。
+- 记：由你判断，标准是换一个新会话还用得上——` + worth + `。用户明确要你记住的，一定记。一条一句，写成不看今天的对话也能懂：
+  ` + write + `
+  · ` + kinds + `
+  · ` + keywords + `
+  · ` + example + `
 - 用：记忆只是过去留下的线索，不是事实——可能记错、过时，或不适用于眼前这件事。先看头部的年龄和标记，依赖它之前先核实；它与用户当下的话、或你手头的材料冲突时，以后者为准，并更新那条记忆（用 ` + "`memory --help`" + ` 看怎么改）。
 - 不记：` + notWorth + `。`
 
 // questions are what a turn is looked back over with, turn naming it ("上一轮"
-// or "这一轮"). What is worth keeping is not repeated: the session's prompt
-// says it, and is in the context whenever this comes. It must not send the
-// agent searching for something to confirm.
+// or "这一轮"). What is worth keeping, and how to fill a write, are not
+// repeated: the session's prompt says them, and is in the context whenever this
+// comes. It must not send the agent searching for something to confirm.
 func questions(turn string) string {
-	return `- ` + turn + `有没有换一个新会话还用得上的东西？按开头 [Memory] 说的标准：记学到了什么，不记发生了什么。有就 ` + "`memory add \"…\"`" + `，一条一句；用户要你记住的，一定记。
-- ` + turn + `靠 ` + "`memory search`" + ` 查到的记忆作答或做事了吗？没发现问题就 ` + "`memory confirm <id>`" + `，对照原始来源核实过就加 ` + "`--outcome verified`" + `；发现它错了：知道现在是什么样就 ` + "`memory add \"…\" --supersedes <id>`" + `，只知道它不对就 ` + "`memory confirm <id> --outcome contradicted --note \"…\"`" + `。没用到就跳过，不要为此再去查。`
+	return `- ` + turn + `有没有换一个新会话还用得上的东西？按开头 [Memory] 说的标准：记学到了什么，不记发生了什么。有就 ` + write + `，一条一句；用户要你记住的，一定记。
+- ` + turn + `靠 ` + "`memory search`" + ` 查到的记忆作答或做事了吗？没发现问题就 ` + "`memory confirm <id>`" + `，对照原始来源核实过就加 ` + "`--outcome verified`" + `；发现它错了：知道现状就 ` + "`memory add \"…\" --supersedes <id>`" + `，只知道它不对就 ` + "`memory confirm <id> --outcome contradicted --note \"…\"`" + `。没用到就跳过，不要为此再去查。`
 }
 
 // LastTurn comes with the person's next message (Claude Code, Codex): look

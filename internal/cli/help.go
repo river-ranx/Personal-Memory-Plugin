@@ -20,6 +20,7 @@ type spec struct {
 	summary string     // one line, in the list of commands
 	args    string     // the positional arguments, as written in the usage line
 	flags   []flagSpec // every flag it takes, besides --project and --json
+	needs   []string   // the flags of these it cannot do without, shown unbracketed
 	aliases []string   // flags it takes without listing: spellings an agent may use
 	help    string     // everything else: what it does, what it prints, tips, examples
 	run     func(command) error
@@ -40,11 +41,14 @@ func (sp spec) usage(name string) string {
 		parts = append(parts, sp.args)
 	}
 	for _, f := range sp.flags {
-		if f.value == "" {
-			parts = append(parts, "[--"+f.name+"]")
-		} else {
-			parts = append(parts, "[--"+f.name+" "+f.value+"]")
+		flag := "--" + f.name
+		if f.value != "" {
+			flag += " " + f.value
 		}
+		if !slices.Contains(sp.needs, f.name) {
+			flag = "[" + flag + "]"
+		}
+		parts = append(parts, flag)
 	}
 	return strings.Join(parts, " ")
 }
@@ -125,6 +129,17 @@ func (sp spec) helpText(name string) string {
 	return b.String()
 }
 
+// kindGuide is how to choose a kind: in the help of add, and in the answer to
+// an add that names none. It is chosen by how a later session should treat the
+// memory, so each line says that.
+const kindGuide = `  rule        must be followed; not following it is a mistake
+  decision    a choice that was made, and why; learn the reason before overturning it
+  preference  how the person likes things done — their habits, taste, corrections
+              (a fact about the person's liking is a preference, not a fact)
+  practice    a reusable way of doing something: steps, a workaround, a trap to avoid
+  fact        how things are now (a tool, a system, a source); it can go stale,
+              so a result shows its age and flags it after 90 days`
+
 // moreAbout is the line that points from a mistake to the command's full help.
 func moreAbout(name string) string { return "more: memory " + name + " --help" }
 
@@ -139,7 +154,7 @@ WHAT IT DOES
   best first. Chinese is cut into two-character windows (报销 is found inside
   这次报销怎么走); English words count, and so do abbreviations such as ci, db, oa;
   single letters and function words (to, is, the, with) do not.
-  Ranking: a match in a memory's title or keywords outweighs one in its text.
+  Ranking: a match in a memory's keywords outweighs one in its text.
   Memories from this project — this directory, one inside it or one containing
   it — rank above other projects' (which are still returned). Memories
   confirmed as used or verified often rank higher; contradicted ones, and ones
@@ -172,11 +187,11 @@ EXAMPLES
 		summary: "remember something",
 		args:    `"<text>"`,
 		flags: []flagSpec{
-			{"kind", "KIND", "preference | fact | rule | decision | practice (default fact)"},
-			{"title", "T", "a short name, one line, at most 60 characters"},
-			{"keywords", "a,b,c", "other words to find it by, at most 10 (comma or space separated; --keyword is the same and may repeat)"},
+			{"kind", "KIND", "rule | decision | preference | practice | fact — required, unless --supersedes; see KINDS"},
+			{"keywords", "a,b,c", "words to find it by that the text lacks, at most 10 (comma or space separated; --keyword is the same and may repeat); see KEYWORDS"},
 			{"supersedes", "ID", "the memory this one replaces; see SUPERSEDING"},
 		},
+		needs:   []string{"kind"}, // but a memory that supersedes another keeps its kind
 		aliases: []string{"keyword"},
 		help: `
 TEXT
@@ -189,21 +204,26 @@ TEXT
       ...the text...
       TEXT
 
-KINDS (--kind; fact when left out)
-  rule        must be followed; not following it is a mistake
-  decision    a choice that was made, and why; learn the reason before overturning it
-  preference  how the person likes things done
-  practice    a reusable way of doing something
-  fact        how things are now; it can go stale, so a result shows its age
+KINDS (--kind; required for a new memory)
+  Choose by how a later session should treat it:
+` + kindGuide + `
 
-KEYWORDS
-  Words someone might search with: synonyms, the English name, abbreviations.
-  They decide whether the memory is found, and count double in ranking. Pass
-  them with --keywords a,b,c.
+KEYWORDS (--keywords a,b,c; give them unless the text already holds every
+word someone would search with)
+  The text is searchable already, every word of it (Chinese in two-character
+  pieces: 城镇化率 is found by 城镇 or 化率). A keyword helps only with a word
+  the text lacks — what a later session might search with instead:
+    - a synonym or another wording: 暗色 for a text that says 深色
+    - the name in the other language: screenshot for 截图, 签名 for codesign
+    - an abbreviation or a nickname: ci, oa, k8s
+    - the broader thing it belongs to: 发版 for a text about notarization
+  A keyword whose words are all in the text adds nothing; the answer names
+  any, and keeps them. Keywords count double in ranking.
 
 WHAT IS NOT STORED (each answer says why and what to do)
-  - Too short: fewer than 3 words. A label ("报销", "release") says nothing; the
-    title and keywords do not count towards it.
+  - Too short: fewer than 3 words. A label ("报销", "release") says nothing;
+    keywords do not count towards it.
+  - No --kind on a new memory: the answer lists the kinds to choose from.
   - A repeat: a memory with nearly the same words exists. The answer shows it and
     the command to replace it.
   Secrets, phone numbers and the like are not checked or changed: this is a
@@ -219,23 +239,25 @@ WHAT IS NOT WORTH STORING (not checked: your judgment)
 
 SUPERSEDING
   --supersedes N replaces memory #N with this one. Give only the new text: the
-  kind, title and keywords you leave out are carried over from #N. #N is not
+  kind and keywords you leave out are carried over from #N. #N is not
   returned by search while this memory is in use; delete or archive this one and
   #N is current again. #N must be in use itself (not archived or already replaced).
 
 ANSWERS
-  Stored #12.                      stored; 12 is its id.
+  Stored #12.                      stored; 12 is its id. A line may follow naming
+                                   keywords already in the text (still stored).
   Not stored: already remembered   names the existing memory (#5), says "add it
                                    again with --supersedes #5" if yours is newer
                                    or more precise, otherwise leave it; then shows it.
   Not stored: refused: …           too short; say it in a sentence, or drop it.
-  Not stored: invalid memory: …    text too long, or an unknown --kind.
-  With --json the same, as {"memory": …} or {"error": …, "message": …}.
+  Not stored: invalid memory: …    text too long, or --kind missing or unknown.
+  With --json the same, as {"memory": …, "keywordsInText": […]} or
+  {"error": …, "message": …}.
 
 EXAMPLES
-  memory add "论文引用一律用 GB/T 7714 著者-出版年制；导师说过不要脚注" --kind preference --title 引用格式
-  memory add "城镇化率一律用常住人口口径，因为统计年鉴 2018 年以前的户籍口径和之后不可比" --kind decision --keywords 城镇化率,口径,统计年鉴
-  memory add "发版只走 release 分支，因为 main 不触发签名流水线" --kind rule --keywords 发版,release,签名
+  memory add "论文引用一律用 GB/T 7714 著者-出版年制；导师说过不要脚注" --kind preference --keywords 参考文献,citation,脚注格式
+  memory add "城镇化率一律用常住人口口径，因为统计年鉴 2018 年以前的户籍口径和之后不可比" --kind decision --keywords urbanization,户口,统计口径
+  memory add "发版只走 release 分支，因为 main 不触发签名流水线" --kind rule --keywords 上线,发布,codesign,notarize
   memory add "访谈稿统一由课题组自己转录，不再外包" --supersedes 12`,
 		run: command.add,
 	},
@@ -426,16 +448,16 @@ examples:   memory <command> --help      (or: memory help <command>)
 
 TYPICAL USE
   memory search 报销 流程 OA          before a task, or when something may have come up before
-  memory add "季度复盘材料先给王总过目再发全员" --kind preference
+  memory add "季度复盘材料先给王总过目再发全员" --kind preference --keywords 汇报,review,季报
   memory confirm 12                   you used #12 and it held up
   memory add "<new text>" --supersedes 12   what #12 says has changed
 
 READING RESULTS
   A result is a header line, then the text as written; results are separated by a
   blank line:
-      #12 · preference · 引用格式 · written 3d ago (2026-11-19) · verified
+      #12 · preference · written 3d ago (2026-11-19) · verified
       论文引用一律用 GB/T 7714 著者-出版年制；导师说过不要脚注。
-  The header reads #id · kind · [title] · when it was written, and then only what
+  The header reads #id · kind · when it was written, and then only what
   is unusual:
       verified             checked on several days: more likely right, still no guarantee
       contradicted 2x      reported wrong twice: check before relying on it

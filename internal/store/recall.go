@@ -31,9 +31,10 @@ const (
 	weakMatchCorpus = 30
 )
 
-// bm25 weights per column of memories_fts: memory_id, title, keywords, body.
-// A word in the title says more about what a memory is than one in passing.
-const bm25Rank = "bm25(0.0, 3.0, 2.0, 1.0)"
+// bm25 weights per column of memories_fts: memory_id, keywords, body. A
+// keyword was given as a way to find the memory, so it says more about what
+// the memory is than a word of the text in passing.
+const bm25Rank = "bm25(0.0, 2.0, 1.0)"
 
 // Hit is a memory and how it stands: its score when it was retrieved, how
 // much of its standing it keeps after going unused, and its counts.

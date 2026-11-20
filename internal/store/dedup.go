@@ -41,8 +41,8 @@ func (d *Duplicate) Error() string {
 // duplicates is the active, unsuperseded memories whose words overlap the
 // draft's by at least duplicateThreshold, closest first.
 func duplicates(tx *sql.Tx, d Draft) ([]Record, error) {
-	draftWords := wordSet(d.Title + " " + d.Content)
-	terms := searchTerms(d.Title + " " + d.Content)
+	draftWords := wordSet(d.Content)
+	terms := searchTerms(d.Content)
 	if len(terms) == 0 {
 		return nil, nil
 	}
@@ -67,7 +67,7 @@ func duplicates(tx *sql.Tx, d Draft) ([]Record, error) {
 		if err != nil {
 			return nil, err
 		}
-		if overlap := jaccard(draftWords, wordSet(r.Title+" "+r.Content)); overlap >= duplicateThreshold {
+		if overlap := jaccard(draftWords, wordSet(r.Content)); overlap >= duplicateThreshold {
 			found = append(found, scored{r, overlap})
 		}
 	}

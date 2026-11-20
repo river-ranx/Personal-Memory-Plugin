@@ -21,8 +21,8 @@ var ErrRefused = errors.New("refused")
 
 // minContentTokens is how many words (see [tokens]) a memory's text must have:
 // three is a short sentence, and a word or two is a label, which says nothing
-// to whoever finds it. The text has to say it itself: a title and keywords are
-// ways to find a memory, not what it says, so they do not count.
+// to whoever finds it. The text has to say it itself: keywords are ways to
+// find a memory, not what it says, so they do not count.
 const minContentTokens = 3
 
 // screen is the gate: nil lets the draft in, an [ErrRefused] keeps it out

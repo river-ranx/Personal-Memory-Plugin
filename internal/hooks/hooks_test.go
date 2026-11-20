@@ -101,7 +101,16 @@ func TestThePromptLeavesTheJudgmentToTheAgent(t *testing.T) {
 			t.Fatalf("the prompt does not tell the agent to weigh what it finds: lacks %q", want)
 		}
 	}
-	if n := len([]rune(Note)); n > 520 {
+	// The prompt shows a write with both flags and says how to fill them: what
+	// the prompt does not show, agents leave out.
+	for _, want := range []string{write, kinds, keywords, example} {
+		if !strings.Contains(Note, want) {
+			t.Fatalf("the prompt does not say how to fill a write's flags: lacks %q", want)
+		}
+	}
+	// Once a session, so it may take the room to set the write out on lines of
+	// its own, with an example; it may not grow past that.
+	if n := len([]rune(Note)); n > 780 {
 		t.Fatalf("the prompt is %d characters: it goes in front of every session", n)
 	}
 }
@@ -214,13 +223,13 @@ func TestNothingElseIsAnswered(t *testing.T) {
 // are short, since one comes with every turn.
 func TestTheReviewsAskAndLetGo(t *testing.T) {
 	for name, text := range map[string]string{"LastTurn": LastTurn, "TurnEnd": TurnEnd} {
-		for _, want := range []string{"memory add", "memory confirm", "--outcome verified", "--supersedes", "contradicted",
+		for _, want := range []string{write, "memory confirm", "--outcome verified", "--supersedes", "contradicted",
 			"用户要你记住的，一定记", "不要为此再去查", "不是用户"} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("%s lacks %q:\n%s", name, want, text)
 			}
 		}
-		if n := len([]rune(text)); n > 420 {
+		if n := len([]rune(text)); n > 450 {
 			t.Fatalf("%s is %d characters: it comes with every turn", name, n)
 		}
 	}

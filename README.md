@@ -45,7 +45,7 @@ curl -fsSL https://raw.githubusercontent.com/river-ranx/Personal-Memory-Plugin/m
 
 ```sh
 memory search 报销 流程 OA [--limit N]
-memory add "<一句话>" [--kind preference|fact|rule|decision|practice] [--title T] [--keywords a,b,c] [--supersedes ID]
+memory add "<一句话>" --kind rule|decision|preference|practice|fact [--keywords a,b,c] [--supersedes ID]
 memory confirm <id…> [--outcome used|verified|contradicted] [--note N]
 memory show <id> | list [--kind K] [--archived] [--limit N]
 memory archive <id…> | restore <id…> | delete <id…>
@@ -72,10 +72,14 @@ memory --help | memory <命令> --help
 
 ## 写入
 
-- 只有正文必填，`--kind` 默认 `fact`；一条最多 1000 字。标题折成一行、最多 60 字；关键词去重、最多 10 个，
-  权重是正文的两倍。
+- 正文和 `--kind` 必填（取代旧记忆时类型可省，沿用旧的）；一条最多 1000 字。类型以前默认 `fact`，
+  结果 Agent 几乎从不写，用户偏好也被记成会过时的 `fact`，所以改成必须选。
+- 关键词去重、最多 10 个，权重是正文的两倍。正文本来就逐词可搜，关键词只在补正文里没有的词（同义词、
+  另一种语言的叫法、缩写）时有用；全在正文里的关键词照样存下，但答复会点出来。
+- 没有标题：正文就一句话、结果里整句显示，标题只会重复正文开头。早期的库打开时自动迁移：标题的词并入关键词，
+  删掉该列并重建全文索引。
 - **重复**：和最接近的 5 条比词的 Jaccard 相似度，≥ 0.4 就不写，给出已有的那条和取代它的现成命令。
-- **取代**（`--supersedes ID`）：没写的类型、标题、关键词继承旧的。只有新记忆记着它取代了谁；
+- **取代**（`--supersedes ID`）：没写的类型、关键词继承旧的。只有新记忆记着它取代了谁；
   新的在用时旧的不返回，新的被归档或删除，旧的立刻重新可用。
 - **确认**（`confirm`）：同一条记忆、同一种结果，一天只算一次。自上次被反驳以来（不论隔多久）在三个不同的日子
   核对过，才标为 `verified`；被反驳一次就撤销，之后重新累计。
@@ -84,7 +88,7 @@ memory --help | memory <命令> --help
 
 - 分词：中文按两字窗口（`报销` 能在「这次报销怎么走」里命中）；英文按词，两个字母的缩写也算（`ci`、`oa`），
   单个字母和 `to`、`the` 这类虚词不算；中英文紧挨着写时在边界切开（`用CI跑` 里的 `ci`）。
-- 打分：FTS5 的 bm25（标题 3、关键词 2、正文 1），再乘同项目、使用次数、核对、反驳几个因子；
+- 打分：FTS5 的 bm25（关键词 2、正文 1），再乘同项目、使用次数、核对、反驳几个因子；
   衰减从最近一次使用算起，90 天减半，最低三成。
 - 被取代的、已归档的不返回。活跃记忆 ≥ 30 条时，只靠一个无关词沾边的结果（弱于最佳的 10%）会被裁掉。
 - 「被搜到」只用来防止衰减（每条每天最多记一次），不算使用；使用次数只算 Agent 用 `confirm` 报告的。
@@ -92,7 +96,7 @@ memory --help | memory <命令> --help
 
 ## 存储
 
-一个 SQLite 文件，三张表，打开时 `CREATE … IF NOT EXISTS`，没有迁移：
+一个 SQLite 文件，三张表，打开时 `CREATE … IF NOT EXISTS`；唯一的迁移是去掉早期的标题列（见「写入」）：
 
 - `memories`：记忆本身；`supersedes` 指向它取代的那条，写入后不再改。
 - `memory_events`：每条记忆怎么被用的——被搜到、用过、核对过、被反驳。次数、最近一次使用、衰减都从这里算；
