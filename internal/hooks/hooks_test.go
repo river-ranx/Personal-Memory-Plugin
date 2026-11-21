@@ -226,14 +226,15 @@ func TestNothingElseIsAnswered(t *testing.T) {
 func TestTheReviewsAskAndLetGo(t *testing.T) {
 	for name, text := range map[string]string{"LastTurn": LastTurn, "TurnEnd": TurnEnd} {
 		for _, want := range []string{write, "memory confirm", "--outcome verified", "--supersedes", "contradicted",
-			"用户要你记住的，一定记", "不要为此再去查", "不是用户"} {
+			"用户要你记住的，一定记", "就不记", "没纠正、没拍板", "不要为此再去查", "不是用户"} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("%s lacks %q:\n%s", name, want, text)
 			}
 		}
 		// A review comes with every turn, so it stays one sentence per question;
-		// 500 characters is that with the three ways a memory can be wrong.
-		if n := len([]rune(text)); n > 500 {
+		// 560 characters is that with the three ways a memory can be wrong and
+		// the turns that need no write.
+		if n := len([]rune(text)); n > 560 {
 			t.Fatalf("%s is %d characters: it comes with every turn", name, n)
 		}
 	}

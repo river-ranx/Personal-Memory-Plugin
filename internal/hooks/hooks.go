@@ -74,7 +74,7 @@ const Note = `[Memory] 你有一份本机长期记忆，用 ` + "`memory`" + ` �
 // repeated: the session's prompt says them, and is in the context whenever this
 // comes. It must not send the agent searching for something to confirm.
 func questions(turn string) string {
-	return `- ` + turn + `有没有换一个新会话还用得上的东西？按开头 [Memory] 说的标准：记学到了什么，不记发生了什么。有就 ` + write + `，一条只讲一件事、不超过两句；用户要你记住的，一定记。
+	return `- ` + turn + `有没有换一个新会话还用得上的东西？按开头 [Memory] 说的标准：记学到了什么，不记发生了什么。有就 ` + write + `，一条只讲一件事、不超过两句；用户要你记住的，一定记。只是解释、查阅，或照指令办完且一切顺利——用户没纠正、没拍板、也没遇到意外——就不记。
 - ` + turn + `靠 ` + "`memory search`" + ` 查到的记忆作答了吗？没问题就 ` + "`memory confirm <id>`" + `，核实过加 ` + "`--outcome verified`" + `；内容错了：知道现状就 ` + "`memory add \"…\" --supersedes <id>`" + `，只知道不对就 ` + "`memory confirm <id> --outcome contradicted --note \"…\"`" + `；只是类型写错就 ` + "`memory edit <id> --kind <类型>`" + `（id 不变）。没用到就跳过，不要为此再去查。`
 }
 
