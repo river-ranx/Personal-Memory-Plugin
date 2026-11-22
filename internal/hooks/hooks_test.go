@@ -47,18 +47,14 @@ func decision(t *testing.T, out string) (string, string) {
 	return a.Decision, a.Reason
 }
 
-// A session starting is answered with the one prompt, in each agent's shape.
-func TestASessionStartsWithThePrompt(t *testing.T) {
-	for _, agent := range []string{"claude", "codex"} {
-		out, errw := call(agent, "SessionStart", `{"session_id":"s1","cwd":"/work/x","source":"startup"}`)
-		if errw != "" || added(t, "SessionStart", out) != Note {
-			t.Fatalf("%s: %q %q", agent, out, errw)
-		}
+// sessionText is what a session start injects, in the agent's shape. For
+// Antigravity the message is an object, not a plain string:
+// {"injectSteps":[{"systemMessage":{"systemMessage":"…"}}]}.
+func sessionText(t *testing.T, agent, out string) string {
+	t.Helper()
+	if agent != "antigravity" {
+		return added(t, "SessionStart", out)
 	}
-	// Antigravity: {"injectSteps":[{"systemMessage":{"systemMessage":"…"}}]} — the
-	// message is an object. A plain string there is not what it reads, and would
-	// not decode into this shape.
-	out, errw := call("antigravity", "SessionStart", `{"conversationId":"g1"}`)
 	var got struct {
 		InjectSteps []struct {
 			SystemMessage struct {
@@ -66,19 +62,56 @@ func TestASessionStartsWithThePrompt(t *testing.T) {
 			} `json:"systemMessage"`
 		} `json:"injectSteps"`
 	}
-	if err := json.Unmarshal([]byte(out), &got); err != nil || errw != "" ||
-		len(got.InjectSteps) != 1 || got.InjectSteps[0].SystemMessage.SystemMessage != Note {
-		t.Fatalf("antigravity: %q %q", out, errw)
+	if err := json.Unmarshal([]byte(out), &got); err != nil || len(got.InjectSteps) != 1 {
+		t.Fatalf("antigravity: %q", out)
+	}
+	return got.InjectSteps[0].SystemMessage.SystemMessage
+}
+
+// A session starting is answered with the prompt and, when the payload names
+// an absolute working directory, its line, in each agent's shape.
+func TestASessionStartsWithThePrompt(t *testing.T) {
+	const cwd = "/work/x"
+	want := Note + "\n" + workingDirectoryLine(cwd)
+	for _, agent := range Agents {
+		out, errw := call(agent, "SessionStart", `{"session_id":"s1","cwd":"/work/x","source":"startup"}`)
+		if errw != "" || sessionText(t, agent, out) != want {
+			t.Fatalf("%s: %q %q", agent, out, errw)
+		}
 	}
 }
 
-// What a session start's payload holds, or whether it is readable at all,
-// changes nothing: the prompt is the same.
-func TestASessionStartIgnoresItsPayload(t *testing.T) {
-	for _, payload := range []string{"", "not json", `{"prompt":"记住这个"}`, `{"session_id":`} {
-		out, errw := call("claude", "SessionStart", payload)
-		if errw != "" || added(t, "SessionStart", out) != Note {
-			t.Fatalf("payload %q: %q %q", payload, out, errw)
+// A session that names its working directory gets one line after the prompt,
+// with the path in the write: a shell that has cd'd elsewhere must not decide
+// where the memory belongs.
+func TestASessionNamesItsWorkingDirectory(t *testing.T) {
+	const cwd = "/work/x"
+	line := "本会话的工作目录是 /work/x；写记忆时加 --project /work/x，不要依赖 shell 当前目录（cd 到别处后会记错归属）。"
+	if got := workingDirectoryLine(cwd); got != line {
+		t.Fatalf("line: %q", got)
+	}
+	for _, agent := range Agents {
+		out, errw := call(agent, "SessionStart", `{"cwd":"/work/x"}`)
+		if errw != "" || sessionText(t, agent, out) != Note+"\n"+line {
+			t.Fatalf("%s: %q %q", agent, out, errw)
+		}
+	}
+	for _, not := range []string{"项目", "代码", "git", "部署", "测试", "环境"} {
+		if strings.Contains(line, not) {
+			t.Fatalf("the line speaks of %q: %q", not, line)
+		}
+	}
+}
+
+// A session start without an absolute working directory is answered with the
+// prompt alone, whatever else the payload holds or whether it can be read.
+func TestASessionStartWithoutAnAbsoluteWorkingDirectoryIsThePrompt(t *testing.T) {
+	for _, agent := range Agents {
+		for _, payload := range []string{"", "not json", `{"prompt":"记住这个"}`, `{"session_id":`, `{"cwd":""}`, `{"cwd":"work/x"}`, `{"cwd":"./work/x"}`, `{"cwd":"../x"}`} {
+			out, errw := call(agent, "SessionStart", payload)
+			if errw != "" || sessionText(t, agent, out) != Note {
+				t.Fatalf("%s payload %q: %q %q", agent, payload, out, errw)
+			}
 		}
 	}
 }
@@ -111,8 +144,10 @@ func TestThePromptLeavesTheJudgmentToTheAgent(t *testing.T) {
 	// Once a session, so it may take the room to set the write out on lines of
 	// its own, with an example, and the two ways to fix one, and to say what a
 	// memory looks like (one thing, two sentences) and what is not worth one;
-	// it may not grow past that.
-	if n := len([]rune(Note)); n > 950 {
+	// it may not grow past that. The limit is 1010 rather than 950 because the
+	// prompt now tells the agent to search for an existing memory before
+	// writing and not to search for what the source itself shows.
+	if n := len([]rune(Note)); n > 1010 {
 		t.Fatalf("the prompt is %d characters: it goes in front of every session", n)
 	}
 }
@@ -226,15 +261,17 @@ func TestNothingElseIsAnswered(t *testing.T) {
 func TestTheReviewsAskAndLetGo(t *testing.T) {
 	for name, text := range map[string]string{"LastTurn": LastTurn, "TurnEnd": TurnEnd} {
 		for _, want := range []string{write, "memory confirm", "--outcome verified", "--supersedes", "contradicted",
-			"用户要你记住的，一定记", "就不记", "没纠正、没拍板", "不要为此再去查", "不是用户"} {
+			"用户要你记住的，一定记", "就不记", "没纠正、没拍板", "不要为此再去查", "不是用户",
+			"写前先 `memory search`", "查重，不是第二问的确认", "不要新开一条"} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("%s lacks %q:\n%s", name, want, text)
 			}
 		}
 		// A review comes with every turn, so it stays one sentence per question;
-		// 560 characters is that with the three ways a memory can be wrong and
-		// the turns that need no write.
-		if n := len([]rune(text)); n > 560 {
+		// 630 (LastTurn) or 640 (TurnEnd) characters is that with the three ways a
+		// memory can be wrong, the turns that need no write, and the search
+		// before a write that keeps one topic from piling up.
+		if n := len([]rune(text)); (name == "LastTurn" && n > 630) || (name == "TurnEnd" && n > 640) {
 			t.Fatalf("%s is %d characters: it comes with every turn", name, n)
 		}
 	}

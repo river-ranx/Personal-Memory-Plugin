@@ -181,6 +181,9 @@ TIPS
   - A few specific words beat a sentence.
   - One query may carry two topics; a memory matching either is found.
   - Chinese is cut in two-character pieces, so a single character finds nothing.
+  - Words the source itself already shows, such as a class name, an interface
+    name or a specific value, are looked up in the source, not here. A topic
+    already searched in this session need not be searched again.
   - Nothing found: try a synonym, the English name, another name for the thing
     (a module, a person's role, an institution), or fewer words. If that finds nothing either, there is nothing to find.
   - A result is a lead, not evidence: check what you can before acting on it
@@ -248,8 +251,12 @@ WHAT IS NOT WORTH STORING (not checked: your judgment)
   the document, git or the pipeline: do not store it. If it holds a lesson,
   store only the lesson. Nor one-off statistics, how an incident unfolded or the
   steps of an investigation (keep the conclusion and what it rests on). Nor what
-  the source itself says and can be looked up again, such as pixel values, line
-  counts or how a function works (where it is, and why it matters, can be stored).
+  is unfinished, a to-do or progress (it goes stale). Nor what the source itself
+  says and can be looked up again, such as pixel values, line counts or how a
+  function works (where it is, and why it matters, can be stored).
+  Before writing, search for the same thing: if a memory already holds it,
+  replace that one with --supersedes, or change it with memory edit, rather
+  than adding another.
 
 SUPERSEDING
   --supersedes N replaces memory #N with this one. Give only the new text: the

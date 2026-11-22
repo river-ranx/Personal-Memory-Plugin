@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
 	"slices"
 	"strings"
 )
@@ -30,6 +31,7 @@ var Events = map[string][]string{
 // payload is what of a hook's input the hook reads. Claude Code and Codex
 // write snake_case, Antigravity camelCase.
 type payload struct {
+	Cwd                string `json:"cwd"`
 	PermissionMode     string `json:"permission_mode"`
 	AgentID            string `json:"agent_id"`
 	ContinuationActive bool   `json:"continuationActive"`
@@ -48,7 +50,11 @@ func Run(agent, event string, in io.Reader, out, errw io.Writer, getenv func(str
 	case !slices.Contains(Events[agent], event):
 		fmt.Fprintf(errw, "memory hook %s %s: not an event memory answers (agents and events: %v)\n", agent, event, Events)
 	case event == sessionStartEvent:
-		answer = sessionStart(agent)
+		cwd := ""
+		if readable {
+			cwd = p.Cwd
+		}
+		answer = sessionStart(agent, cwd)
 	case event == promptEvent:
 		answer = lastTurn(p, getenv)
 	case event == stopEvent:
@@ -60,15 +66,30 @@ func Run(agent, event string, in io.Reader, out, errw io.Writer, getenv func(str
 	}
 }
 
-// sessionStart is the prompt, in the shape agent reads.
-func sessionStart(agent string) any {
+// sessionStart is the prompt, in the shape agent reads. A session that names
+// an absolute cwd gets one more line, so a memory written after the shell has
+// moved keeps the directory the session began in.
+func sessionStart(agent, cwd string) any {
+	text := Note
+	if line := workingDirectoryLine(cwd); line != "" {
+		text += "\n" + line
+	}
 	if agent == "antigravity" {
 		// A system message stays in the conversation across turns. It takes
 		// an object, not a string: {"systemMessage": {"systemMessage": text}}
 		// (Antigravity's hooks documentation says so in as many words).
-		return map[string]any{"injectSteps": []map[string]any{{"systemMessage": map[string]string{"systemMessage": Note}}}}
+		return map[string]any{"injectSteps": []map[string]any{{"systemMessage": map[string]string{"systemMessage": text}}}}
 	}
-	return context(sessionStartEvent, Note)
+	return context(sessionStartEvent, text)
+}
+
+// workingDirectoryLine is [workingDirectoryNote] for cwd, or empty when cwd is
+// missing or not absolute: then a session start carries [Note] alone.
+func workingDirectoryLine(cwd string) string {
+	if cwd == "" || !filepath.IsAbs(cwd) {
+		return ""
+	}
+	return fmt.Sprintf(workingDirectoryNote, cwd, cwd)
 }
 
 // lastTurn adds [LastTurn] to the person's message (Claude Code, Codex) —
