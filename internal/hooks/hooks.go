@@ -58,8 +58,8 @@ const (
 // does with its memory — search, write — and says what to use for each; the
 // memory skill has the rest.
 const Note = `[Memory] 你有一份本机长期记忆，用 ` + "`memory`" + ` 命令读写（用法见 memory skill；不确定就先 ` + "`memory --help`" + `，不要猜参数）。
-- 查：开始一项任务、话题换了、遇到可能以前讨论过的事、要下结论或给建议之前，先 ` + "`memory search <关键词>`" + `。查询词若是类名、接口名、具体数值这类原文里能直接找到的，去翻原文，不查记忆；同一话题本次会话已经查过，不重复查。
-- 记：由你判断，标准是换一个新会话还用得上——` + worth + `。用户明确要你记住的，一定记。写成不看今天的对话也能懂：
+- 查：开始一项任务、话题换了、遇到可能以前讨论过的事、要下结论或给建议之前，先 ` + "`memory search <关键词>`" + `。查询词若是类名、接口名、具体数值这类原文里能直接找到的，去翻原文，不查记忆；同一话题本次会话已经查过，不重复查。用户让你找文件、查外部资料，或要的是某个工具此刻的状态，也不查记忆，直接去看。
+- 记：由你判断，标准是换一个新会话还用得上——` + worth + `。用户明确要你记住的，一定记；排查出根因、试出可行做法的，当轮就写，别等下一轮回顾（会话最后一轮没有下一轮）。写成不看今天的对话也能懂：
   ` + write + `
   · ` + kinds + `
   · ` + keywords + `
@@ -81,7 +81,7 @@ const workingDirectoryNote = "本会话的工作目录是 %s；写记忆时加 -
 // first question's search is for an existing memory to update, not for one to
 // confirm.
 func questions(turn string) string {
-	return `- ` + turn + `有没有换一个新会话还用得上的东西？按开头 [Memory] 说的标准：记学到了什么，不记发生了什么。有就写：写前先 ` + "`memory search`" + ` 看同一件事是否已有记忆（查重，不是第二问的确认），有就用 ` + "`--supersedes <id>`" + ` 取代或 ` + "`memory edit <id>`" + ` 改，不要新开一条；没有就 ` + write + `，一条只讲一件事、不超过两句；用户要你记住的，一定记。只是解释、查阅，或照指令办完且一切顺利——用户没纠正、没拍板、也没遇到意外——就不记。
+	return `- ` + turn + `有没有换一个新会话还用得上的东西？按开头 [Memory] 说的标准：记学到了什么，不记发生了什么。有就写：写前先 ` + "`memory search`" + ` 看同一件事是否已有记忆（查重，不是第二问的确认），有就用 ` + "`--supersedes <id>`" + ` 取代或 ` + "`memory edit <id>`" + ` 改，不要新开一条；没有就 ` + write + `，一条只讲一件事、不超过两句；用户要你记住的，一定记。只是解释、查阅，或照指令办完且一切顺利——用户没纠正、没拍板、也没遇到意外——就不记；排查出根因、试出可行做法不算顺利，要记。
 - ` + turn + `靠 ` + "`memory search`" + ` 查到的记忆作答了吗？没问题就 ` + "`memory confirm <id>`" + `，核实过加 ` + "`--outcome verified`" + `；内容错了：知道现状就 ` + "`memory add \"…\" --supersedes <id>`" + `，只知道不对就 ` + "`memory confirm <id> --outcome contradicted --note \"…\"`" + `；只是类型写错就 ` + "`memory edit <id> --kind <类型>`" + `（id 不变）。没用到就跳过，不要为此再去查。`
 }
 

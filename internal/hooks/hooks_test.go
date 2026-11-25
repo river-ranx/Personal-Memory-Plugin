@@ -119,7 +119,8 @@ func TestASessionStartWithoutAnAbsoluteWorkingDirectoryIsThePrompt(t *testing.T)
 // The prompt leaves the judgment to the agent: it says when to look, what is
 // worth writing, what is not; it does not say a message called for either.
 func TestThePromptLeavesTheJudgmentToTheAgent(t *testing.T) {
-	for _, want := range []string{"memory search", "memory add", "由你判断", "用户明确要你记住的，一定记", "流水账", "没说学到了什么", "只记教训", "memory skill", "memory --help"} {
+	for _, want := range []string{"memory search", "memory add", "由你判断", "用户明确要你记住的，一定记", "流水账", "没说学到了什么", "只记教训", "memory skill", "memory --help",
+		"也不查记忆，直接去看", "排查出根因、试出可行做法的，当轮就写，别等下一轮回顾"} {
 		if !strings.Contains(Note, want) {
 			t.Fatalf("the prompt lacks %q:\n%s", want, Note)
 		}
@@ -144,10 +145,12 @@ func TestThePromptLeavesTheJudgmentToTheAgent(t *testing.T) {
 	// Once a session, so it may take the room to set the write out on lines of
 	// its own, with an example, and the two ways to fix one, and to say what a
 	// memory looks like (one thing, two sentences) and what is not worth one;
-	// it may not grow past that. The limit is 1010 rather than 950 because the
-	// prompt now tells the agent to search for an existing memory before
-	// writing and not to search for what the source itself shows.
-	if n := len([]rune(Note)); n > 1010 {
+	// it may not grow past that. The limit is 1120 rather than 1010 because the
+	// prompt also says what is not worth a search (a file, an outside source, a
+	// tool's state right now) and to write what a diagnosis found in the turn
+	// it was found: the last turn of a session has no turn after it to be
+	// looked back over from.
+	if n := len([]rune(Note)); n > 1120 {
 		t.Fatalf("the prompt is %d characters: it goes in front of every session", n)
 	}
 }
@@ -262,16 +265,17 @@ func TestTheReviewsAskAndLetGo(t *testing.T) {
 	for name, text := range map[string]string{"LastTurn": LastTurn, "TurnEnd": TurnEnd} {
 		for _, want := range []string{write, "memory confirm", "--outcome verified", "--supersedes", "contradicted",
 			"用户要你记住的，一定记", "就不记", "没纠正、没拍板", "不要为此再去查", "不是用户",
-			"写前先 `memory search`", "查重，不是第二问的确认", "不要新开一条"} {
+			"写前先 `memory search`", "查重，不是第二问的确认", "不要新开一条", "排查出根因、试出可行做法不算顺利，要记"} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("%s lacks %q:\n%s", name, want, text)
 			}
 		}
 		// A review comes with every turn, so it stays one sentence per question;
-		// 630 (LastTurn) or 640 (TurnEnd) characters is that with the three ways a
-		// memory can be wrong, the turns that need no write, and the search
-		// before a write that keeps one topic from piling up.
-		if n := len([]rune(text)); (name == "LastTurn" && n > 630) || (name == "TurnEnd" && n > 640) {
+		// 660 (LastTurn) or 670 (TurnEnd) characters is that with the three ways a
+		// memory can be wrong, the turns that need no write (and that a diagnosis
+		// or a way that worked out is not one), and the search before a write
+		// that keeps one topic from piling up.
+		if n := len([]rune(text)); (name == "LastTurn" && n > 660) || (name == "TurnEnd" && n > 670) {
 			t.Fatalf("%s is %d characters: it comes with every turn", name, n)
 		}
 	}
