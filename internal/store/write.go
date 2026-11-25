@@ -2,7 +2,9 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -116,6 +118,26 @@ func (s *Store) SetArchived(id int64, archived bool) error {
 	return nil
 }
 
+// Replaces is the memory id was written to replace, if any.
+func (s *Store) Replaces(id int64) (int64, bool, error) {
+	var old sql.NullInt64
+	err := s.db.QueryRow("SELECT supersedes FROM memories WHERE id = ?1", id).Scan(&old)
+	if err != nil || !old.Valid {
+		return 0, false, nil
+	}
+	return old.Int64, true, nil
+}
+
+// IsCurrent is whether memory id is one a search returns: active, and not
+// replaced by a memory in use. A memory that does not exist is not.
+func (s *Store) IsCurrent(id int64) (bool, error) {
+	r, err := load(s.db, id)
+	if errors.Is(err, ErrNotFound) {
+		return false, nil
+	}
+	return err == nil && r.State == StateActive && r.SupersededBy == nil, err
+}
+
 // Delete removes a memory, its index entry and its history: a deleted
 // memory leaves nothing behind.
 func (s *Store) Delete(id int64) error {
@@ -135,12 +157,16 @@ func (s *Store) Delete(id int64) error {
 }
 
 // Edit is what [Store.Update] changes about a memory. A field left out keeps
-// what the memory has: Content nil, Kind empty, Keywords nil. Keywords that
-// are not nil replace the list, so an empty one clears it.
+// what the memory has: Content nil, Kind empty, Keywords and AddKeywords nil.
+// Keywords that are not nil replace the list, so an empty one clears it;
+// AddKeywords are put after the ones it has, a word it already has once only,
+// and what does not fit the limit is left out (see [CleanKeywords]). Giving
+// both is for the caller to refuse: Keywords would win.
 type Edit struct {
-	Content  *string
-	Kind     string
-	Keywords []string
+	Content     *string
+	Kind        string
+	Keywords    []string
+	AddKeywords []string
 }
 
 // Update corrects a memory in place: same id, same history, same age. It is
@@ -166,6 +192,8 @@ func (s *Store) Update(id int64, e Edit) (Record, error) {
 		}
 		if e.Keywords != nil {
 			d.Keywords = e.Keywords
+		} else if len(e.AddKeywords) > 0 {
+			d.Keywords = append(slices.Clone(old.Keywords), e.AddKeywords...)
 		}
 		d, err = d.normalize()
 		if err != nil {

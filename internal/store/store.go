@@ -22,12 +22,57 @@ import (
 type Store struct {
 	db  *sql.DB
 	now func() uint64
+	// readOnly is why the store could only be opened for reading, nil when it
+	// is open for writing too. A read-only store answers searches and lists but
+	// notes nothing: see [OpenForRead].
+	readOnly error
 }
 
-// Open opens the database at path, creating it and its tables if needed.
-func Open(path string) (*Store, error) {
+// UnavailableError is a database that could not be used: not that nothing was
+// found in it. An agent that reads it as an empty memory goes on as if nothing
+// had ever been remembered, so it says what failed, where, and that this is
+// not an empty answer.
+type UnavailableError struct {
+	Path string
+	// Step is what was being done when it failed.
+	Step string
+	Err  error
+}
+
+func (e *UnavailableError) Error() string {
+	return fmt.Sprintf("memory unavailable: could not %s (%s): %v. The memory could not be used — this is not \"no memories\", so do not carry on as if nothing were remembered, and tell the person. If the directory is not writable here (a sandbox, a read-only mount), point MEMORY_HOME at one that is",
+		e.Step, e.Path, e.Err)
+}
+
+func (e *UnavailableError) Unwrap() error { return e.Err }
+
+// Open opens the database at path for reading and writing, creating it and its
+// tables if needed.
+func Open(path string) (*Store, error) { return openWritable(path) }
+
+// OpenForRead is [Open] for a command that only reads. Where the database
+// cannot be opened for writing — its directory or file is read-only, as in a
+// sandbox — it is opened read-only instead, and [Store.ReadOnly] says why. A
+// read-only store notes no search hits and refuses nothing else: its writers
+// are not called.
+func OpenForRead(path string) (*Store, error) {
+	s, err := openWritable(path)
+	if err == nil {
+		return s, nil
+	}
+	if ro, roErr := openReadOnly(path); roErr == nil {
+		ro.readOnly = err
+		return ro, nil
+	}
+	return nil, err
+}
+
+// ReadOnly is why the store is open for reading only; nil when it can write.
+func (s *Store) ReadOnly() error { return s.readOnly }
+
+func openWritable(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, err
+		return nil, &UnavailableError{Path: path, Step: "create the memory directory", Err: err}
 	}
 	// WAL lets one memory process read while another writes; IMMEDIATE takes the
 	// write lock when a transaction begins, so two writers wait on the busy
@@ -36,21 +81,73 @@ func Open(path string) (*Store, error) {
 		"_pragma": {"busy_timeout(5000)", "journal_mode(WAL)", "synchronous(NORMAL)"},
 		"_txlock": {"immediate"},
 	}
-	dsn := (&url.URL{Scheme: "file", Path: path}).String() + "?" + query.Encode()
-	db, err := sql.Open("sqlite", dsn)
+	db, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path}).String()+"?"+query.Encode())
 	if err != nil {
-		return nil, err
+		return nil, &UnavailableError{Path: path, Step: "open the memory database", Err: err}
 	}
 	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(schema); err != nil {
+	if err := prepare(db); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("could not prepare the memory database: %w", err)
+		return nil, &UnavailableError{Path: path, Step: "prepare the memory database", Err: err}
+	}
+	return &Store{db: db, now: now}, nil
+}
+
+// openReadOnly opens an existing database for reading. A WAL database needs
+// its -shm file to be read; where that cannot be made (a read-only directory)
+// the file is read as it stands, immutable, which is complete whenever no
+// writer has it open — and one that has, has its -shm and -wal beside it, so
+// the first attempt would have worked.
+func openReadOnly(path string) (*Store, error) {
+	var last error
+	for _, mode := range []url.Values{{"mode": {"ro"}}, {"mode": {"ro"}, "immutable": {"1"}}} {
+		mode.Set("_pragma", "busy_timeout(5000)")
+		db, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: path}).String()+"?"+mode.Encode())
+		if err != nil {
+			last = err
+			continue
+		}
+		db.SetMaxOpenConns(1)
+		var n int
+		if err := db.QueryRow("SELECT COUNT(*) FROM memories").Scan(&n); err != nil {
+			db.Close()
+			last = err
+			continue
+		}
+		return &Store{db: db, now: now}, nil
+	}
+	return nil, last
+}
+
+func now() uint64 { return uint64(max(time.Now().Unix(), 0)) }
+
+// schemaVersion is stored in the database's user_version once [schema] has
+// been applied, so that opening a database that is up to date reads and writes
+// nothing: it is what lets every command, searches included, start on a
+// database whose file cannot be written. A change to [schema] raises it.
+const schemaVersion = 1
+
+// prepare brings a database to the current schema: creating what is missing
+// and upgrading what is old, and only when it is not already.
+func prepare(db *sql.DB) error {
+	var version int
+	if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		return err
+	}
+	if version < schemaVersion {
+		if _, err := db.Exec(schema); err != nil {
+			return err
+		}
 	}
 	if err := dropTitles(db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("could not upgrade the memory database: %w", err)
+		return fmt.Errorf("could not upgrade the memory database: %w", err)
 	}
-	return &Store{db: db, now: func() uint64 { return uint64(max(time.Now().Unix(), 0)) }}, nil
+	if version < schemaVersion {
+		// user_version takes no bound parameter.
+		_, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", schemaVersion))
+		return err
+	}
+	return nil
 }
 
 // Close closes the database.
@@ -109,12 +206,17 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
 // full-text index is built again without it. Inside one transaction, which
 // checks again for the column: two processes may open an old database at once.
 func dropTitles(db *sql.DB) error {
+	// Looked at first outside a transaction: Begin takes the write lock, and
+	// a database with no title column has nothing to upgrade.
+	var titled int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name = 'title'`).Scan(&titled); err != nil || titled == 0 {
+		return err
+	}
 	tx, err := db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	var titled int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('memories') WHERE name = 'title'`).Scan(&titled); err != nil || titled == 0 {
 		return err
 	}

@@ -22,6 +22,7 @@ type spec struct {
 	flags   []flagSpec // every flag it takes, besides --project and --json
 	needs   []string   // the flags of these it cannot do without, shown unbracketed
 	aliases []string   // flags it takes without listing: spellings an agent may use
+	reads   bool       // it only reads: it still answers where the database cannot be written
 	help    string     // everything else: what it does, what it prints, tips, examples
 	run     func(command) error
 }
@@ -145,6 +146,7 @@ func moreAbout(name string) string { return "more: memory " + name + " --help" }
 
 var commands = map[string]spec{
 	"search": {
+		reads:   true,
 		summary: "find memories relevant to some words",
 		args:    "<words...>",
 		flags: []flagSpec{
@@ -172,6 +174,10 @@ OUTPUT
   memory --help). When more matched than --limit shows, a last line says how
   many ("34 matched; showing 5"). Nothing found prints "No memories match." and
   what to try; a one-character Chinese word says why it cannot match.
+  Where the database cannot be written (a sandbox, a read-only mount) search
+  still answers from it and says so on stderr: nothing is noted about the hits.
+  A database that cannot be used at all is not "No memories match": it exits
+  with status 2 and says so (see EXIT STATUS in memory --help).
 
 --kind
   Only memories of that kind:  memory search 报销 --kind rule. A kind that is
@@ -267,13 +273,17 @@ SUPERSEDING
 ANSWERS
   Stored #12.                      stored; 12 is its id. A line may follow naming
                                    keywords already in the text, or saying the text is
-                                   over 250 characters and may be two memories (still stored).
+                                   over 250 characters and may be two memories, or that
+                                   it holds many numbers or reads like progress or a to-do,
+                                   or that the memory it replaces was written under an
+                                   hour ago and an edit would do (all still stored).
   Not stored: already remembered   names the existing memory (#5), says "add it
                                    again with --supersedes #5" if yours is newer
                                    or more precise, otherwise leave it; then shows it.
   Not stored: refused: …           too short; say it in a sentence, or drop it.
   Not stored: invalid memory: …    text too long, or --kind missing or unknown.
-  With --json the same, as {"memory": …, "keywordsInText": […], "tooLong": N} or
+  With --json the same, as {"memory": …, "keywordsInText": […], "tooLong": N,
+  "hints": [{"code": …, "text": …}], "replacedRecently": {"id": N, "minutes": M}} or
   {"error": …, "message": …}.
 
 EXAMPLES
@@ -289,9 +299,10 @@ EXAMPLES
 		flags: []flagSpec{
 			{"kind", "KIND", "the kind it should have had: rule | decision | preference | practice | fact"},
 			{"keywords", "a,b,c", "replace its keywords with these, at most 10 (--keyword is the same and may repeat); `--keywords -` clears them"},
+			{"add-keywords", "a,b,c", "add these to the keywords it has, keeping them (a word it has already is not repeated; at most 10 in all; --add-keyword is the same)"},
 			{"content", "TEXT", "replace its text (give \"-\" to read it from stdin)"},
 		},
-		aliases: []string{"keyword"},
+		aliases: []string{"keyword", "add-keyword"},
 		help: `
 WHAT IT DOES
   Corrects a memory that was written wrong — the wrong kind, a missing keyword,
@@ -304,6 +315,10 @@ WHAT IT DOES
 FIELDS
   A field left out is not changed. --keywords replaces the whole list; give
   the words it should now have, not only the new one. --keywords - clears it.
+  To add a word — a synonym someone searched with and the memory lacked — use
+  --add-keywords: the keywords it has stay, and the new ones come after them.
+  Give --keywords or --add-keywords, not both. Words past the limit of 10 are
+  left out, and the answer names them.
   --content replaces the text, and is held to the same rules as add: at least
   3 words, and not a repeat of another memory. Changing only the kind, or only
   the keywords, is allowed even if the text is short.
@@ -314,7 +329,8 @@ WHAT IS KEPT
   again: supersede the memory that replaced it instead.
 
 ANSWERS
-  Updated #12.                    then the memory as a search shows it.
+  Updated #12.                    then the memory as a search shows it; a last line
+                                  names keywords left out for being past the limit.
   Not stored: invalid memory: …   unknown kind, empty text, or nothing to change.
   Not stored: refused: …          new text too short to be a memory.
   Not stored: already remembered   the new text repeats another memory; the
@@ -324,6 +340,7 @@ ANSWERS
 EXAMPLES
   memory edit 12 --kind preference
   memory edit 12 --keywords 汇报,review,季报
+  memory edit 12 --add-keywords 截屏,闪退
   memory edit 12 --keywords -
   memory edit 12 --content "周报先给组长过目再发全组，她要先核对数字"`,
 		run: command.edit,
@@ -370,6 +387,7 @@ EXAMPLES
 		run: command.confirm,
 	},
 	"show": {
+		reads:   true,
 		summary: "one memory in full, with its counts",
 		args:    "<id>",
 		help: `
@@ -386,6 +404,7 @@ EXAMPLES
 		run: command.show,
 	},
 	"list": {
+		reads:   true,
 		summary: "browse memories, newest first",
 		flags: []flagSpec{
 			{"kind", "KIND", "only this kind"},
@@ -417,7 +436,8 @@ EXAMPLES
 WHAT IT DOES
   Keeps a memory but never returns it from search. Use it for a memory that is
   not wrong but no longer useful. If the archived memory had replaced an older
-  one, the older one is current again until this one is restored.
+  one, the older one is current again until this one is restored; the answer
+  says so, naming it.
 
 EXAMPLES
   memory archive 12 13`,
@@ -438,8 +458,8 @@ EXAMPLES
 WHAT IT DOES
   Removes the memory, its search index entry and its history; nothing is left
   and it cannot be restored. Its id is never given to another memory. If it had
-  replaced an older memory, the older one is current again. To keep a memory but
-  stop it being returned, use archive.
+  replaced an older memory, the older one is current again, and the answer says
+  so, naming it. To keep a memory but stop it being returned, use archive.
 
 EXAMPLES
   memory delete 12`,
@@ -571,6 +591,9 @@ IDS AND FLAGS
 
 EXIT STATUS
   0 = done. 1 = not done: the output says why and what to try next.
+  2 = the memory database could not be used at all (cannot be opened, or
+  written by a command that writes). That is not "nothing was found": say so to
+  the person rather than going on as if nothing were remembered.
 
 STORAGE
   $MEMORY_HOME/memory.db, by default ~/.memory/memory.db. Nothing leaves this machine.

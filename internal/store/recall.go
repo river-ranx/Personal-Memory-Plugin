@@ -96,7 +96,15 @@ func (s *Store) Find(query string, project *string, kind string, limit int) (Fou
 	for i, h := range hits {
 		ids[i] = h.ID
 	}
-	return Found{Hits: hits, Matched: matched}, s.recordHits(ids, now)
+	// Noting what was returned is bookkeeping, which only keeps a memory from
+	// fading. When it cannot be written — a read-only store, a writer holding the
+	// lock past the busy timeout — the search has still found its memories, and
+	// answers with them: failing here would hand an agent an error in place of
+	// what it asked for, and it would read that as there being nothing.
+	if s.readOnly == nil {
+		_ = s.recordHits(ids, now)
+	}
+	return Found{Hits: hits, Matched: matched}, nil
 }
 
 func (s *Store) recall(query string, project *string, kind string, limit int, now uint64) ([]Hit, int, error) {

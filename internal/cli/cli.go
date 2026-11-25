@@ -35,6 +35,12 @@ type Env struct {
 // ErrReported is an error whose explanation is already on stdout.
 var ErrReported = errors.New("reported")
 
+// ExitUnavailable is the exit code of a command that could not use the memory
+// database at all. It is not 1, which says "not done, here is why": an agent
+// that reads an unusable database as an empty one goes on as if nothing had
+// ever been remembered.
+const ExitUnavailable = 2
+
 // Main runs one command and returns the process's exit code. Any command but
 // those that set memory up starts the daily background update check, if due.
 func Main(args []string, env Env) int {
@@ -46,6 +52,10 @@ func Main(args []string, env Env) int {
 	if err := dispatch(args, env); err != nil {
 		if !errors.Is(err, ErrReported) {
 			fmt.Fprintln(env.Stderr, "memory:", err)
+		}
+		var unavailable *store.UnavailableError
+		if errors.As(err, &unavailable) {
+			return ExitUnavailable
 		}
 		return 1
 	}
@@ -86,12 +96,27 @@ func dispatch(args []string, env Env) error {
 			return nil
 		}
 	}
-	open := func() (*store.Store, error) {
+	// open is the database for a command: one that only reads (reads) is given
+	// a read-only one where the file cannot be written, and says so on stderr,
+	// since a search that notes nothing is not quite the search it was.
+	open := func(reads bool) (*store.Store, error) {
 		path, err := DBPath(env.Getenv)
 		if err != nil {
 			return nil, err
 		}
-		return store.Open(path)
+		if !reads {
+			return store.Open(path)
+		}
+		s, err := store.OpenForRead(path)
+		if err == nil && s.ReadOnly() != nil {
+			why := s.ReadOnly()
+			var unavailable *store.UnavailableError
+			if errors.As(why, &unavailable) {
+				why = unavailable.Err
+			}
+			fmt.Fprintf(env.Stderr, "memory: note: %s cannot be written here (%v), so it was opened read-only: results are complete, but nothing is noted about them.\n", path, why)
+		}
+		return s, err
 	}
 	switch args[0] {
 	case "version", "--version":
@@ -145,7 +170,7 @@ func dispatch(args []string, env Env) error {
 		if err := cmd.check(args[0], flags); err != nil {
 			return err
 		}
-		s, err := open()
+		s, err := open(cmd.reads)
 		if err != nil {
 			return err
 		}
@@ -303,6 +328,13 @@ func (c command) add() error {
 	// memory names it; one that supersedes another keeps that one's.
 	var m store.Record
 	var err error
+	// How long ago the memory being replaced was written, before it is replaced.
+	replacedAge := time.Duration(-1)
+	if d.Supersedes != nil {
+		if old, err := c.s.Entry(*d.Supersedes); err == nil {
+			replacedAge = time.Since(time.Unix(int64(old.CreatedAt), 0))
+		}
+	}
 	if strings.TrimSpace(d.Kind) == "" && d.Supersedes == nil {
 		err = fmt.Errorf("%w: say which kind of memory this is with --kind:\n%s", store.ErrInvalid, kindGuide)
 	} else {
@@ -343,8 +375,19 @@ func (c command) add() error {
 	inText := store.KeywordsInText(m.Content, d.Keywords)
 	_, dropped := store.CleanKeywords(d.Keywords)
 	length := utf8.RuneCountInString(m.Content)
+	hints := store.WriteHints(m.Content)
+	// A memory replaced soon after it was written was most likely written wrong,
+	// or too early; a fix to that is an edit, which keeps one memory and its id.
+	// Said, not refused: what it says may really have changed since.
+	recentlyReplaced := d.Supersedes != nil && replacedAge >= 0 && replacedAge < recentWrite
 	if c.flags.has("json") {
 		answer := map[string]any{"memory": view(store.Hit{Record: m, Decay: 1})}
+		if len(hints) > 0 {
+			answer["hints"] = hintViews(hints, m.ID)
+		}
+		if recentlyReplaced {
+			answer["replacedRecently"] = map[string]any{"id": *d.Supersedes, "minutes": int(replacedAge / time.Minute)}
+		}
 		if len(inText) > 0 {
 			answer["keywordsInText"] = inText
 		}
@@ -374,7 +417,34 @@ func (c command) add() error {
 	if length > store.LongContent {
 		fmt.Fprintf(c.env.Stdout, "This memory is %d characters, long for one thing. If it says more than one thing, split it: cut this one down with `memory edit %d --content …` and add the rest as its own memory. Keep the conclusion, the way to do it and the reason; leave out the process.\n", length, m.ID)
 	}
+	for _, h := range hintViews(hints, m.ID) {
+		fmt.Fprintln(c.env.Stdout, h.Text)
+	}
+	if recentlyReplaced {
+		fmt.Fprintf(c.env.Stdout, "%s was written only %d min ago. If it was written wrong or too early, `memory edit %d --content …` corrects it in place and keeps one memory; supersede when what it says has changed since.\n",
+			store.FormatID(*d.Supersedes), int(replacedAge/time.Minute), *d.Supersedes)
+	}
 	return nil
+}
+
+// recentWrite is how new a memory is that a replacement of it is noted: what is
+// replaced within the hour was most likely never settled.
+const recentWrite = time.Hour
+
+// hintView is a write hint as --json gives it.
+type hintView struct {
+	Code string `json:"code"`
+	Text string `json:"text"`
+}
+
+// hintViews are the hints with the memory's own id where they name the command
+// that fixes it.
+func hintViews(hints []store.Hint, id int64) []hintView {
+	out := make([]hintView, len(hints))
+	for i, h := range hints {
+		out[i] = hintView{h.Code, strings.ReplaceAll(h.Text, "<id>", strconv.FormatInt(id, 10))}
+	}
+	return out
 }
 
 func (c command) confirm() error {
@@ -507,6 +577,10 @@ func (c command) edit() error {
 		e.Content = &text
 	}
 	keywords := append(c.flags.all("keywords"), c.flags.all("keyword")...)
+	adding := append(c.flags.all("add-keywords"), c.flags.all("add-keyword")...)
+	if len(keywords) > 0 && len(adding) > 0 {
+		return usageErr("give --keywords (it replaces the list) or --add-keywords (it adds to the list), not both")
+	}
 	if len(keywords) > 0 {
 		words := splitWords(keywords)
 		if len(words) == 1 && words[0] == "-" {
@@ -514,8 +588,13 @@ func (c command) edit() error {
 		}
 		e.Keywords = words
 	}
-	if e.Content == nil && e.Kind == "" && e.Keywords == nil {
-		return usageErr("edit needs something to change: --kind, --keywords or --content")
+	if len(adding) > 0 {
+		if e.AddKeywords = splitWords(adding); len(e.AddKeywords) == 0 {
+			return usageErr("--add-keywords needs the words to add")
+		}
+	}
+	if e.Content == nil && e.Kind == "" && e.Keywords == nil && e.AddKeywords == nil {
+		return usageErr("edit needs something to change: --kind, --keywords, --add-keywords or --content")
 	}
 	m, err := c.s.Update(id, e)
 	var duplicate *store.Duplicate
@@ -541,16 +620,35 @@ func (c command) edit() error {
 	case err != nil:
 		return err
 	}
+	// Words asked for and not kept were past the limit: said, since a keyword
+	// silently lost is a way to find the memory that the writer thinks is there.
+	var notKept []string
+	for _, w := range append(slices.Clone(e.Keywords), e.AddKeywords...) {
+		if !slices.ContainsFunc(m.Keywords, func(k string) bool { return strings.EqualFold(k, w) }) && !slices.Contains(notKept, w) {
+			notKept = append(notKept, w)
+		}
+	}
 	if c.flags.has("json") {
-		return c.json(map[string]any{"memory": detailed(store.Hit{Record: m, Decay: 1})})
+		answer := map[string]any{"memory": detailed(store.Hit{Record: m, Decay: 1})}
+		if len(notKept) > 0 {
+			answer["keywordsDropped"] = notKept
+		}
+		return c.json(answer)
 	}
 	fmt.Fprintf(c.env.Stdout, "Updated %s.\n", store.FormatID(m.ID))
 	c.printAll([]store.Hit{{Record: m, Decay: 1}}, c.project())
+	if len(notKept) > 0 {
+		fmt.Fprintf(c.env.Stdout, "Keywords past the limit of %d were not stored: %s.\n", store.KeywordLimit, strings.Join(notKept, ", "))
+	}
 	return nil
 }
 
 func (c command) setArchived(archived bool) error {
 	ids, err := c.ids("give the ids of the memories")
+	if err != nil {
+		return err
+	}
+	watched, err := c.watchReplaced(ids)
 	if err != nil {
 		return err
 	}
@@ -560,11 +658,59 @@ func (c command) setArchived(archived bool) error {
 		}
 	}
 	fmt.Fprintln(c.env.Stdout, "Done.")
+	return c.sayReplaced(watched)
+}
+
+// replacedWatch is a memory that one being changed had replaced, and whether it
+// was current before: archiving or deleting the newer one makes it current
+// again, restoring it makes it replaced again, and that is something an agent
+// would otherwise learn by being surprised by a search.
+type replacedWatch struct {
+	id      int64
+	current bool
+}
+
+func (c command) watchReplaced(ids []int64) ([]replacedWatch, error) {
+	var out []replacedWatch
+	for _, id := range ids {
+		old, ok, err := c.s.Replaces(id)
+		if err != nil {
+			return nil, err
+		}
+		if !ok || slices.ContainsFunc(out, func(w replacedWatch) bool { return w.id == old }) {
+			continue
+		}
+		current, err := c.s.IsCurrent(old)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, replacedWatch{old, current})
+	}
+	return out, nil
+}
+
+func (c command) sayReplaced(watched []replacedWatch) error {
+	for _, w := range watched {
+		current, err := c.s.IsCurrent(w.id)
+		if err != nil {
+			return err
+		}
+		switch {
+		case current && !w.current:
+			fmt.Fprintf(c.env.Stdout, "%s, which it replaced, is current again and searches return it. Archive or delete %s too if it should go as well.\n", store.FormatID(w.id), store.FormatID(w.id))
+		case !current && w.current:
+			fmt.Fprintf(c.env.Stdout, "%s is replaced again, so searches no longer return it.\n", store.FormatID(w.id))
+		}
+	}
 	return nil
 }
 
 func (c command) delete() error {
 	ids, err := c.ids("give the ids of the memories")
+	if err != nil {
+		return err
+	}
+	watched, err := c.watchReplaced(ids)
 	if err != nil {
 		return err
 	}
@@ -574,7 +720,7 @@ func (c command) delete() error {
 		}
 	}
 	fmt.Fprintln(c.env.Stdout, "Deleted.")
-	return nil
+	return c.sayReplaced(watched)
 }
 
 // parseID reads an id an agent typed; one that is not a number is a misuse.
@@ -597,7 +743,7 @@ func foldKeywordSpill(args []string) []string {
 	given := false // a positional argument before the flag: text, or the id
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
-		if arg == "--keywords" || arg == "--keyword" {
+		if arg == "--keywords" || arg == "--keyword" || arg == "--add-keywords" || arg == "--add-keyword" {
 			value := ""
 			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") {
 				value = args[i+1]

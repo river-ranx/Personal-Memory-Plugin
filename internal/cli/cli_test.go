@@ -52,7 +52,9 @@ func (r run) backdate(days int) {
 	}
 }
 
-var stored = regexp.MustCompile(`^Stored #(\d+)\.\n$`)
+// A line or two of notes may follow (keywords already in the text, a memory
+// replaced soon after it was written); the first line says what was stored.
+var stored = regexp.MustCompile(`^Stored #(\d+)\.\n`)
 
 // add writes a memory, a fact unless the arguments name a kind or a memory
 // it supersedes; the answer is its number.
