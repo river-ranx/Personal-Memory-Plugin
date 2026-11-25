@@ -26,6 +26,9 @@ type Store struct {
 	// is open for writing too. A read-only store answers searches and lists but
 	// notes nothing: see [OpenForRead].
 	readOnly error
+	// touched are the memory ids the command now running has been given or has
+	// returned, kept for the command log: see [Store.LogCommand].
+	touched []int64
 }
 
 // UnavailableError is a database that could not be used: not that nothing was
@@ -124,8 +127,14 @@ func now() uint64 { return uint64(max(time.Now().Unix(), 0)) }
 // schemaVersion is stored in the database's user_version once [schema] has
 // been applied, so that opening a database that is up to date reads and writes
 // nothing: it is what lets every command, searches included, start on a
-// database whose file cannot be written. A change to [schema] raises it.
-const schemaVersion = 1
+// database whose file cannot be written. A change to [schema], or to how the
+// index is cut ([indexTokens]), raises it.
+//
+// 2: the index is cut after [fold] (full-width and half-width forms, hiragana
+// as katakana) and has three-character windows.
+// 3: the command log. Only a table was added, but the index is built again all
+// the same: an upgrade has one step, and it is cheap.
+const schemaVersion = 3
 
 // prepare brings a database to the current schema: creating what is missing
 // and upgrading what is old, and only when it is not already.
@@ -143,11 +152,66 @@ func prepare(db *sql.DB) error {
 		return fmt.Errorf("could not upgrade the memory database: %w", err)
 	}
 	if version < schemaVersion {
-		// user_version takes no bound parameter.
-		_, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", schemaVersion))
-		return err
+		if err := reindex(db); err != nil {
+			return fmt.Errorf("could not upgrade the memory database: %w", err)
+		}
 	}
 	return nil
+}
+
+// reindex builds the full-text index again from the memories, cut the way
+// [indexTokens] cuts now, and records [schemaVersion] with it: one
+// transaction, so an upgrade that stops halfway is not recorded and is done
+// again. The version is looked at again inside it, since two processes may
+// open an old database at once. Where the file cannot be written the store
+// opens for reading instead, and searches the index as it stands.
+func reindex(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var version int
+	if err := tx.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		return err
+	}
+	if version >= schemaVersion {
+		return nil
+	}
+	type row struct {
+		id                int64
+		keywords, content string
+	}
+	var all []row
+	rows, err := tx.Query(`SELECT id, keywords, content FROM memories`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.id, &r.keywords, &r.content); err != nil {
+			rows.Close()
+			return err
+		}
+		all = append(all, r)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM memories_fts`); err != nil {
+		return err
+	}
+	for _, r := range all {
+		if err := index(tx, r.id, []string{r.keywords}, r.content); err != nil {
+			return err
+		}
+	}
+	// user_version takes no bound parameter.
+	if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", schemaVersion)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // Close closes the database.
@@ -184,6 +248,20 @@ CREATE TABLE IF NOT EXISTS memory_events (
 	note      TEXT
 );
 CREATE INDEX IF NOT EXISTS memory_events_by_memory ON memory_events (memory_id, at);
+
+-- One row per command run (see trail.go). ids is a JSON array of the memory
+-- ids the command was given or returned, never their text; query is only a
+-- search's words. A deleted memory's id stays here: ids are never reused.
+CREATE TABLE IF NOT EXISTS command_log (
+	id      INTEGER PRIMARY KEY,
+	at      INTEGER NOT NULL,
+	command TEXT NOT NULL,
+	project TEXT,
+	query   TEXT,
+	ids     TEXT NOT NULL DEFAULT '[]',
+	ok      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS command_log_by_at ON command_log (at);
 ` + ftsSchema
 
 // ftsSchema is the full-text index.

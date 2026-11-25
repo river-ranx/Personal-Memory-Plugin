@@ -439,3 +439,68 @@ func TestKeywordsInTheTextAreNamed(t *testing.T) {
 		t.Fatalf("in the text: %q", got)
 	}
 }
+
+// A memory is found by the other width of the word it is written in.
+func TestAMemoryIsFoundByAnotherWidthOfItsWords(t *testing.T) {
+	s := open(t)
+	ci := write(t, s, Draft{Content: "ＣＩ の流水线失败时先看迁移日志", Kind: KindPractice})
+	kana := write(t, s, Draft{Content: "ｶﾞｲﾄﾞ はエンジニア向けに書く", Kind: KindRule})
+	for query, want := range map[string]int64{"ci": ci.ID, "がいど": kana.ID, "えんじにあ": kana.ID} {
+		if hits, err := s.Search(query, nil, 5); err != nil || len(hits) != 1 || hits[0].ID != want {
+			t.Fatalf("%q: %v %v", query, ids(hits), err)
+		}
+	}
+}
+
+// A run of kana asked for ranks above a memory that only holds all of its
+// pairs, scattered: エンジン, ジニー and ニアミス have every pair of エンジニア,
+// which the pairs alone cannot tell from the word itself.
+func TestTheRunAskedForRanksAboveItsScatteredPairs(t *testing.T) {
+	s := open(t)
+	scattered := write(t, s, Draft{Content: "エンジン と ジニー と ニアミス の用語メモ", Kind: KindFact})
+	word := write(t, s, Draft{Content: "新人エンジニア の面談は月初にまとめて行う", Kind: KindRule})
+	hits, err := s.Search("エンジニア", nil, 5)
+	if err != nil || len(hits) != 2 || hits[0].ID != word.ID || hits[1].ID != scattered.ID {
+		t.Fatalf("エンジニア: %v %v", ids(hits), err)
+	}
+}
+
+// A database whose index was cut the old way is cut again when it is opened,
+// and is not touched when it is opened after that.
+func TestAnIndexCutTheOldWayIsBuiltAgain(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := write(t, s, Draft{Content: "ＣＩ の流水线失败时先看迁移日志", Kind: KindPractice})
+	// What a database of the previous version holds: an index that cannot
+	// find the full-width word, and the previous version number.
+	if _, err := s.db.Exec(`UPDATE memories_fts SET body = 'ｃｉ'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`PRAGMA user_version = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if hits, _ := s.Search("ci", nil, 5); len(hits) != 0 {
+		t.Fatalf("the old index found %v", ids(hits))
+	}
+	s.Close()
+
+	for range 2 {
+		s, err = Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := countRows(t, s, "PRAGMA user_version"); n != schemaVersion {
+			t.Fatalf("user_version %d", n)
+		}
+		if hits, err := s.Search("ci", nil, 5); err != nil || len(hits) != 1 || hits[0].ID != a.ID {
+			t.Fatalf("after the upgrade: %v %v", ids(hits), err)
+		}
+		if n := countRows(t, s, "SELECT COUNT(*) FROM memories_fts"); n != 1 {
+			t.Fatalf("%d index rows", n)
+		}
+		s.Close()
+	}
+}

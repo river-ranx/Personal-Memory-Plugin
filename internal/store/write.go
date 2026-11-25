@@ -37,6 +37,9 @@ const promoteVerifiedN = 3
 // path skips them. A draft too short to say anything is an [ErrRefused], a
 // repeat a *[Duplicate]; either way nothing is stored.
 func (s *Store) Write(d Draft) (Record, error) {
+	if d.Supersedes != nil {
+		s.touch(*d.Supersedes)
+	}
 	var id int64
 	err := s.inTx(func(tx *sql.Tx) error {
 		var err error
@@ -44,9 +47,22 @@ func (s *Store) Write(d Draft) (Record, error) {
 		return err
 	})
 	if err != nil {
+		s.touchRepeated(err)
 		return Record{}, err
 	}
+	s.touch(id)
 	return load(s.db, id)
+}
+
+// touchRepeated notes the memories a refused draft repeats, which the answer
+// names: they are what the command returned.
+func (s *Store) touchRepeated(err error) {
+	var duplicate *Duplicate
+	if errors.As(err, &duplicate) {
+		for _, r := range duplicate.Existing {
+			s.touch(r.ID)
+		}
+	}
 }
 
 // insert is [Store.Write] inside a transaction the caller owns.
@@ -100,6 +116,7 @@ func insert(tx *sql.Tx, d Draft, now uint64) (int64, error) {
 
 // SetArchived archives or restores a memory. Archived, it is never retrieved.
 func (s *Store) SetArchived(id int64, archived bool) error {
+	s.touch(id)
 	state := StateActive
 	if archived {
 		state = StateArchived
@@ -141,6 +158,7 @@ func (s *Store) IsCurrent(id int64) (bool, error) {
 // Delete removes a memory, its index entry and its history: a deleted
 // memory leaves nothing behind.
 func (s *Store) Delete(id int64) error {
+	s.touch(id)
 	return s.inTx(func(tx *sql.Tx) error {
 		if _, err := load(tx, id); err != nil {
 			return err
@@ -178,6 +196,7 @@ type Edit struct {
 // short or repeats another does not stop its kind being put right. An
 // archived memory stays archived, and a replaced one stays replaced.
 func (s *Store) Update(id int64, e Edit) (Record, error) {
+	s.touch(id)
 	err := s.inTx(func(tx *sql.Tx) error {
 		old, err := load(tx, id)
 		if err != nil {
@@ -228,6 +247,7 @@ func (s *Store) Update(id int64, e Edit) (Record, error) {
 		return index(tx, id, d.Keywords, d.Content)
 	})
 	if err != nil {
+		s.touchRepeated(err)
 		return Record{}, err
 	}
 	return load(s.db, id)
@@ -262,6 +282,7 @@ func (s *Store) Confirm(ids []int64, outcome Outcome, note string) (Confirmation
 	default:
 		return done, invalid("outcome must be verified, used or contradicted")
 	}
+	s.touch(ids...)
 	now := s.now()
 	err := s.inTx(func(tx *sql.Tx) error {
 		for _, id := range ids {

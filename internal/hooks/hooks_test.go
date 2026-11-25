@@ -188,19 +188,25 @@ func TestNoReviewWhereItDoesNotBelong(t *testing.T) {
 	}
 }
 
-// Antigravity looks back when a turn ends: it is kept from stopping once; the
-// stop that reminder asked for goes through, or it would never stop.
+// Antigravity looks back when a turn ends: it is kept from stopping once; every
+// stop after that one goes through, or it would never stop. The payloads are
+// what Antigravity CLI sent (2026-11-25): continuationActive is false at every
+// stop, so it is executionNum that says which stop this is.
 func TestAnAntigravityTurnEndsWithTheReminderOnce(t *testing.T) {
-	out, _ := call("antigravity", "Stop", `{"conversationId":"g","terminationReason":"NO_TOOL_CALL","continuationActive":false}`)
+	out, _ := call("antigravity", "Stop", `{"conversationId":"g","terminationReason":"NO_TOOL_CALL","continuationActive":false,"executionNum":0}`)
 	if d, r := decision(t, out); d != "continue" || r != TurnEnd {
 		t.Fatalf("%q", out)
 	}
 	for _, payload := range []string{
-		`{"terminationReason":"NO_TOOL_CALL","continuationActive":true}`, // the stop the reminder asked for
-		`{"terminationReason":"ERROR","continuationActive":false}`,
-		`{"terminationReason":"USER_CANCELED","continuationActive":false}`,
-		`{"terminationReason":"MAX_INVOCATIONS","continuationActive":false}`,
-		`{"terminationReason":"MAX_FORCED_INVOCATIONS","continuationActive":false}`,
+		// the stops the reminder brought about: continuationActive stays false
+		`{"terminationReason":"NO_TOOL_CALL","continuationActive":false,"executionNum":1}`,
+		`{"terminationReason":"NO_TOOL_CALL","continuationActive":false,"executionNum":2}`,
+		`{"terminationReason":"NO_TOOL_CALL","executionNum":8}`,
+		`{"terminationReason":"NO_TOOL_CALL","continuationActive":false}`, // does not say which stop: a loop is worse
+		`{"terminationReason":"ERROR","executionNum":0}`,
+		`{"terminationReason":"USER_CANCELED","executionNum":0}`,
+		`{"terminationReason":"MAX_INVOCATIONS","executionNum":0}`,
+		`{"terminationReason":"MAX_FORCED_INVOCATIONS","executionNum":0}`,
 		`{`, // unreadable: a loop is worse than a missed reminder
 	} {
 		if d, _ := decision(t, first(call("antigravity", "Stop", payload))); d != "stop" {
@@ -219,7 +225,7 @@ func TestTheReviewCanBeSwitchedOff(t *testing.T) {
 		if out, _ := callWith(env, "claude", "UserPromptSubmit", `{"prompt":"x"}`); out != "" {
 			t.Fatalf("MEMORY_REVIEW=%q: %q", off, out)
 		}
-		out, _ := callWith(env, "antigravity", "Stop", `{"terminationReason":"NO_TOOL_CALL"}`)
+		out, _ := callWith(env, "antigravity", "Stop", `{"terminationReason":"NO_TOOL_CALL","executionNum":0}`)
 		if d, _ := decision(t, out); d != "stop" {
 			t.Fatalf("antigravity, MEMORY_REVIEW=%q: not let stop", off)
 		}

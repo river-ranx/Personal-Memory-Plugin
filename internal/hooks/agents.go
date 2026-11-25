@@ -31,11 +31,14 @@ var Events = map[string][]string{
 // payload is what of a hook's input the hook reads. Claude Code and Codex
 // write snake_case, Antigravity camelCase.
 type payload struct {
-	Cwd                string `json:"cwd"`
-	PermissionMode     string `json:"permission_mode"`
-	AgentID            string `json:"agent_id"`
-	ContinuationActive bool   `json:"continuationActive"`
-	TerminationReason  string `json:"terminationReason"`
+	Cwd               string `json:"cwd"`
+	PermissionMode    string `json:"permission_mode"`
+	AgentID           string `json:"agent_id"`
+	TerminationReason string `json:"terminationReason"`
+	// ExecutionNum is, on Antigravity's Stop, how many times the agent has
+	// been kept running since the person's message: 0 at the first stop, 1
+	// at the stop after one continue. A pointer, to tell 0 from not sent.
+	ExecutionNum *int `json:"executionNum"`
 }
 
 // Run answers one hook call: agent's event, its payload on in, its answer on
@@ -104,13 +107,19 @@ func lastTurn(p payload, getenv func(string) string) any {
 	return context(promptEvent, LastTurn)
 }
 
-// turnEnd keeps Antigravity from stopping once, with [TurnEnd] — unless it was
-// switched off, the turn did not end normally, or this stop is the one a
-// reminder already asked for (continuationActive): asking again would never
-// end. A payload it cannot read gets no reminder for that reason: a loop is
-// worse than a missed one. Any decision but "continue" lets it stop.
+// turnEnd keeps Antigravity from stopping once, with [TurnEnd] — only at the
+// first stop of a turn (executionNum 0): every stop after it is one a continue
+// brought about, and asking again would never end. Not when it was switched
+// off or the turn did not end normally either. A payload it cannot read, or
+// that does not say which stop this is, gets no reminder for that reason: a
+// loop is worse than a missed one. Any decision but "continue" lets it stop.
+//
+// executionNum, not the payload's continuationActive: measured on Antigravity
+// CLI (2026-11-25), continuationActive is false at every stop, the ones a
+// continue brought about included, so a guard on it never held and the agent
+// was kept from stopping again and again.
 func turnEnd(p payload, readable bool, getenv func(string) string) any {
-	if !readable || switchedOff(getenv) || p.ContinuationActive || p.TerminationReason != "NO_TOOL_CALL" {
+	if !readable || switchedOff(getenv) || p.ExecutionNum == nil || *p.ExecutionNum != 0 || p.TerminationReason != "NO_TOOL_CALL" {
 		return map[string]any{"decision": "stop"}
 	}
 	return map[string]any{"decision": "continue", "reason": TurnEnd}

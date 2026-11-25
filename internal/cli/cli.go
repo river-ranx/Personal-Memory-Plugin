@@ -175,7 +175,13 @@ func dispatch(args []string, env Env) error {
 			return err
 		}
 		defer s.Close()
-		return cmd.run(command{s: s, env: env, flags: flags, args: positional})
+		c := command{s: s, env: env, flags: flags, args: positional}
+		runErr := cmd.run(c)
+		// The one place every command passes: a row in the command log, however
+		// it ended. A command refused before the database is opened (a mistyped
+		// flag) never gets here, and is not logged.
+		c.logRun(args[0], runErr)
+		return runErr
 	}()
 	// A misuse is answered with how to use the command right.
 	var misuse usageError
@@ -243,6 +249,16 @@ func (c command) project() *string {
 		return nil
 	}
 	return &p
+}
+
+// logRun writes the command's row in the command log. The log is bookkeeping,
+// so a failure to write it is not the command's failure.
+func (c command) logRun(name string, runErr error) {
+	query := ""
+	if name == "search" {
+		query = strings.Join(c.args, " ")
+	}
+	_ = c.s.LogCommand(store.CommandRun{Command: name, Project: c.project(), Query: query, OK: runErr == nil})
 }
 
 func (c command) search() error {

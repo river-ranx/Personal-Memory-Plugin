@@ -96,6 +96,7 @@ func (s *Store) Find(query string, project *string, kind string, limit int) (Fou
 	for i, h := range hits {
 		ids[i] = h.ID
 	}
+	s.touch(ids...)
 	// Noting what was returned is bookkeeping, which only keeps a memory from
 	// fading. When it cannot be written — a read-only store, a writer holding the
 	// lock past the busy timeout — the search has still found its memories, and
@@ -208,6 +209,7 @@ func (s *Store) recall(query string, project *string, kind string, limit int, no
 
 // Entry is one memory with its counts and decay.
 func (s *Store) Entry(id int64) (Hit, error) {
+	s.touch(id)
 	r, err := load(s.db, id)
 	if err != nil {
 		return Hit{}, err
@@ -271,6 +273,9 @@ func (s *Store) List(q ListQuery) ([]Hit, error) {
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	for _, r := range records {
+		s.touch(r.ID)
 	}
 	return withCounts(s.db, records, s.now())
 }
